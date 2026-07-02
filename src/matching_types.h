@@ -57,6 +57,9 @@ struct RoomMember {
     QString avatarUrl;
     QString addr;
     uint16_t port = 0;
+    uint32_t platform = 3;
+    QVector<QString> blockedUsers;
+    QVector<uint64_t> blockedAccountIds;
     uint64_t joinDate = 0;
     uint32_t flagAttr = 0;
     uint8_t teamId = 0;
@@ -97,6 +100,8 @@ struct Room {
     std::optional<QByteArray> roomPassword;
     QVector<QString> allowedUsers;
     QVector<QString> blockedUsers;
+    QVector<uint64_t> allowedAccountIds;
+    QVector<uint64_t> blockedAccountIds;
 
     uint16_t ownerMemberId = 0;
     QVector<uint16_t> ownerSuccession;
@@ -121,19 +126,12 @@ struct Room {
     }
 
     uint16_t allocMemberId() {
-        uint16_t slot = 1;
-        for (; slot <= 64; ++slot) {
-            bool taken = false;
-            for (auto it = members.begin(); it != members.end(); ++it)
-                if ((it->memberId >> 4) == slot) {
-                    taken = true;
-                    break;
-                }
-            if (!taken)
+        uint16_t mid = 1;
+        for (; mid <= 64; ++mid) {
+            if (!members.contains(mid))
                 break;
         }
-        memberIdCounter = static_cast<uint16_t>((memberIdCounter + 1) & 0xF);
-        return static_cast<uint16_t>((slot << 4) | memberIdCounter);
+        return mid;
     }
 
     RoomMember* addMember(const RoomMember& proto) {
@@ -175,7 +173,7 @@ struct Room {
     uint64_t joinedSlotMask() const {
         uint64_t mask = 0;
         for (auto it = members.begin(); it != members.end(); ++it) {
-            const uint16_t slot = static_cast<uint16_t>(it->memberId >> 4);
+            const uint16_t slot = it->memberId;
             if (slot > 0 && slot <= 64)
                 mask |= (1ull << (slot - 1));
         }
