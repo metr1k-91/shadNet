@@ -43,6 +43,7 @@ enum class CommandType : uint16_t {
     SetRoomDataExternal = 21,
     KickoutRoomMember = 22,
     GetWorldInfoList = 23,
+    GetRoomDataExternalList = 24,
     // Scores
     GetBoardInfos = 30,
     RecordScore = 31,

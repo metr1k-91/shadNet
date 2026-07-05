@@ -202,6 +202,8 @@ ErrorType ClientSession::DispatchCommand(CommandType cmd, StreamExtractor& se, Q
         return CmdLeaveRoom(se, reply);
     case CommandType::SearchRoom:
         return CmdSearchRoom(se, reply);
+    case CommandType::GetRoomDataExternalList:
+        return CmdGetRoomDataExternalList(se, reply);
     case CommandType::RequestSignalingInfos:
         return CmdRequestSignalingInfos(se, reply);
     case CommandType::SetRoomDataInternal:

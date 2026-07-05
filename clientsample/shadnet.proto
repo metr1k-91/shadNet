@@ -267,6 +267,8 @@ message MatchingRoomDataExternal {
     repeated MatchingBinAttr     external_search_bin_attrs = 16;
     repeated MatchingBinAttr     external_bin_attrs        = 17;
     string                       owner_npid               = 18;
+    uint64                       owner_account_id         = 19;
+    uint32                       owner_platform           = 20;
 }
 
 message CreateJoinRoomResponse {

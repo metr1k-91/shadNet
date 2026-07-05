@@ -97,6 +97,53 @@ bool RoomMatchesFilters(const Room& room, const shadnet::SearchRoomRequest& req)
     return true;
 }
 
+uint64_t SlotMaskForMaxSlot(uint16_t maxSlot) {
+    if (maxSlot >= 64)
+        return ~0ull;
+    if (maxSlot == 0)
+        return 0;
+    return (1ull << maxSlot) - 1ull;
+}
+
+uint16_t CountSlots(uint64_t mask) {
+    uint16_t count = 0;
+    while (mask != 0) {
+        mask &= mask - 1;
+        ++count;
+    }
+    return count;
+}
+
+uint64_t GroupPasswordSlotMask(const Room& room, uint64_t validSlots) {
+    uint64_t mask = 0;
+    uint16_t slotBase = 0;
+    for (const auto& group : room.groups) {
+        const uint32_t slotCount = group.slotNum == 0 ? room.maxSlot : group.slotNum;
+        for (uint32_t i = 0; i < slotCount && slotBase < room.maxSlot; ++i, ++slotBase) {
+            if (group.withPassword)
+                mask |= 1ull << slotBase;
+        }
+        if (slotBase >= room.maxSlot)
+            break;
+    }
+    return mask & validSlots;
+}
+
+void RecomputeRoomSlotCounts(Room& room) {
+    const uint64_t validSlots = SlotMaskForMaxSlot(room.maxSlot);
+    uint64_t privateSlots = room.passwdSlotMask & validSlots;
+    if (privateSlots == 0)
+        privateSlots = GroupPasswordSlotMask(room, validSlots);
+
+    const uint64_t publicSlots = validSlots & ~privateSlots;
+    const uint64_t joinedSlots = room.joinedSlotMask() & validSlots;
+
+    room.publicSlots = CountSlots(publicSlots);
+    room.privateSlots = CountSlots(privateSlots);
+    room.openPublicSlots = CountSlots(publicSlots & ~joinedSlots);
+    room.openPrivateSlots = CountSlots(privateSlots & ~joinedSlots);
+}
+
 void ResetLocalMatchingRoomState(MatchingSessionState& matching) {
     matching.roomId = 0;
     matching.myMemberId = 0;
@@ -222,7 +269,11 @@ static shadnet::MatchingRoomDataExternal BuildRoomDataExternal(const Room& room)
         ba->set_data(slot.data.constData(), slot.data.size());
     }
     const RoomMember* owner = const_cast<Room&>(room).findById(room.ownerMemberId);
-    pb.set_owner_npid(owner ? owner->npid.toStdString() : std::string());
+    if (owner) {
+        pb.set_owner_npid(owner->npid.toStdString());
+        pb.set_owner_account_id(static_cast<uint64_t>(owner->userId));
+        pb.set_owner_platform(owner->platform);
+    }
     return pb;
 }
 
@@ -496,8 +547,7 @@ ErrorType ClientSession::CmdCreateRoom(StreamExtractor& data, QByteArray& reply)
         slot.updateMemberId = memberId;
     }
 
-    room.publicSlots = maxSlot;
-    room.openPublicSlots = static_cast<uint16_t>(maxSlot - 1);
+    RecomputeRoomSlotCounts(room);
 
     m_matching.roomId = rid;
     m_matching.myMemberId = memberId;
@@ -532,9 +582,11 @@ ErrorType ClientSession::CmdCreateRoom(StreamExtractor& data, QByteArray& reply)
     }
 
     qInfo() << "Room" << rid << "created by" << m_info.npid << "max=" << maxSlot
-            << "world=" << room.worldId << "lobby=" << room.lobbyId
-            << "key=" << m_matching.matchingKey << "flags=" << Qt::hex << m_matching.roomFlags
-            << Qt::dec;
+            << "public/open=" << room.publicSlots << "/" << room.openPublicSlots
+            << "private/open=" << room.privateSlots << "/" << room.openPrivateSlots
+            << "passwdMask=" << Qt::hex << room.passwdSlotMask << "world=" << room.worldId
+            << "lobby=" << room.lobbyId << "key=" << m_matching.matchingKey
+            << "flags=" << Qt::hex << m_matching.roomFlags << Qt::dec;
     return ErrorType::NoError;
 }
 
@@ -599,8 +651,7 @@ ErrorType ClientSession::CmdJoinRoom(StreamExtractor& data, QByteArray& reply) {
         maxSlot = room.maxSlot;
 
         const uint16_t curMemberNum = static_cast<uint16_t>(room.members.size());
-        room.openPublicSlots =
-            static_cast<uint16_t>(room.maxSlot > curMemberNum ? room.maxSlot - curMemberNum : 0);
+        RecomputeRoomSlotCounts(room);
         if (curMemberNum >= room.maxSlot)
             room.flagAttr |= Matching2::ORBIS_NP_MATCHING2_ROOM_FLAG_ATTR_FULL;
 
@@ -685,9 +736,7 @@ ErrorType ClientSession::CmdLeaveRoom(StreamExtractor& data, QByteArray& reply) 
             roomDestroyed = true;
             qInfo() << "Room" << roomId << "destroyed";
         } else {
-            const uint16_t curMemberNum = static_cast<uint16_t>(room.members.size());
-            room.openPublicSlots = static_cast<uint16_t>(
-                room.maxSlot > curMemberNum ? room.maxSlot - curMemberNum : 0);
+            RecomputeRoomSlotCounts(room);
             room.flagAttr &= ~Matching2::ORBIS_NP_MATCHING2_ROOM_FLAG_ATTR_FULL;
 
             if (wasOwner) {
@@ -764,9 +813,7 @@ ErrorType ClientSession::CmdKickoutRoomMember(StreamExtractor& data, QByteArray&
 
         room.removeMember(targetMemberId);
         room.ownerSuccession.removeAll(targetMemberId);
-        const uint16_t curMemberNum = static_cast<uint16_t>(room.members.size());
-        room.openPublicSlots =
-            static_cast<uint16_t>(room.maxSlot > curMemberNum ? room.maxSlot - curMemberNum : 0);
+        RecomputeRoomSlotCounts(room);
         room.flagAttr &= ~Matching2::ORBIS_NP_MATCHING2_ROOM_FLAG_ATTR_FULL;
     }
 
@@ -937,6 +984,31 @@ ErrorType ClientSession::CmdSearchRoom(StreamExtractor& data, QByteArray& reply)
     return ErrorType::NoError;
 }
 
+ErrorType ClientSession::CmdGetRoomDataExternalList(StreamExtractor& data, QByteArray& reply) {
+    shadnet::GetRoomDataExternalListRequest req;
+    if (!decodeProto(req, data) || data.error())
+        return ErrorType::Malformed;
+
+    shadnet::GetRoomDataExternalListReply rep;
+    int found = 0;
+    {
+        QReadLocker lk(&m_shared->matching.roomsLock);
+        for (int i = 0; i < req.room_ids_size(); ++i) {
+            const uint64_t rid = req.room_ids(i);
+            auto roomIt = m_shared->matching.rooms.find({m_matching.matchingKey, rid});
+            if (roomIt == m_shared->matching.rooms.end())
+                continue;
+            *rep.add_rooms() = BuildRoomDataExternal(roomIt.value());
+            ++found;
+        }
+    }
+    appendProto(reply, rep);
+
+    qInfo() << "GetRoomDataExternalList:" << m_info.npid << "key=" << m_matching.matchingKey
+            << "requested=" << req.room_ids_size() << "found=" << found;
+    return ErrorType::NoError;
+}
+
 ErrorType ClientSession::CmdRequestSignalingInfos(StreamExtractor& data, QByteArray& reply) {
     shadnet::RequestSignalingInfosRequest req;
     if (!decodeProto(req, data) || data.error())
@@ -1024,8 +1096,10 @@ ErrorType ClientSession::CmdSetRoomDataInternal(StreamExtractor& data, QByteArra
         room.flagAttr = (room.flagAttr & ~effFilter) | (flagAttr & effFilter);
         newFlags = room.flagAttr;
 
-        if (hasPasswdMask)
+        if (hasPasswdMask) {
             room.passwdSlotMask = passwdSlotMask;
+            RecomputeRoomSlotCounts(room);
+        }
 
         const RoomMember* setter = room.findByNpid(m_info.npid);
         const uint16_t setterId = setter ? setter->memberId : 0;
@@ -1184,9 +1258,7 @@ void ClientSession::DoLeaveRoom(uint64_t roomId) {
             roomDestroyed = true;
             qInfo() << "Room" << roomId << "destroyed (disconnect)";
         } else {
-            const uint16_t curMemberNum = static_cast<uint16_t>(room.members.size());
-            room.openPublicSlots = static_cast<uint16_t>(
-                room.maxSlot > curMemberNum ? room.maxSlot - curMemberNum : 0);
+            RecomputeRoomSlotCounts(room);
             room.flagAttr &= ~Matching2::ORBIS_NP_MATCHING2_ROOM_FLAG_ATTR_FULL;
             if (wasOwner) {
                 uint16_t newOwner = 0;
