@@ -585,8 +585,8 @@ ErrorType ClientSession::CmdCreateRoom(StreamExtractor& data, QByteArray& reply)
             << "public/open=" << room.publicSlots << "/" << room.openPublicSlots
             << "private/open=" << room.privateSlots << "/" << room.openPrivateSlots
             << "passwdMask=" << Qt::hex << room.passwdSlotMask << "world=" << room.worldId
-            << "lobby=" << room.lobbyId << "key=" << m_matching.matchingKey
-            << "flags=" << Qt::hex << m_matching.roomFlags << Qt::dec;
+            << "lobby=" << room.lobbyId << "key=" << m_matching.matchingKey << "flags=" << Qt::hex
+            << m_matching.roomFlags << Qt::dec;
     return ErrorType::NoError;
 }
 
