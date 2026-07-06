@@ -210,6 +210,7 @@ struct MatchingSharedState {
     QHash<QPair<ComId, uint64_t>, Room> rooms;
     QHash<QPair<ComId, uint32_t>, QVector<uint64_t>> worldRooms;
     QHash<QPair<ComId, uint64_t>, QVector<uint64_t>> lobbyRooms;
+    QHash<QPair<ComId, QString>, QVector<BinAttrSlot>> userInfo;
     std::atomic<uint64_t> nextRoomId{1};
 
     QHash<QString, QVector<WorldConfig>> worldConfigs;

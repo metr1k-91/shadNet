@@ -194,6 +194,8 @@ ErrorType ClientSession::DispatchCommand(CommandType cmd, StreamExtractor& se, Q
         return CmdContextStart(se);
     case CommandType::ContextStop:
         return CmdContextStop(se);
+    case CommandType::SetUserInfo:
+        return CmdSetUserInfo(se, reply);
     case CommandType::CreateRoom:
         return CmdCreateRoom(se, reply);
     case CommandType::JoinRoom:
@@ -204,6 +206,10 @@ ErrorType ClientSession::DispatchCommand(CommandType cmd, StreamExtractor& se, Q
         return CmdSearchRoom(se, reply);
     case CommandType::GetRoomDataExternalList:
         return CmdGetRoomDataExternalList(se, reply);
+    case CommandType::GetRoomMemberDataExternalList:
+        return CmdGetRoomMemberDataExternalList(se, reply);
+    case CommandType::GetUserInfoList:
+        return CmdGetUserInfoList(se, reply);
     case CommandType::RequestSignalingInfos:
         return CmdRequestSignalingInfos(se, reply);
     case CommandType::SetRoomDataInternal:

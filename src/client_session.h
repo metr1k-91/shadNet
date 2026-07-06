@@ -218,6 +218,9 @@ public:
     ErrorType CmdLeaveRoom(StreamExtractor& data, QByteArray& reply);
     ErrorType CmdSearchRoom(StreamExtractor& data, QByteArray& reply);
     ErrorType CmdGetRoomDataExternalList(StreamExtractor& data, QByteArray& reply);
+    ErrorType CmdGetRoomMemberDataExternalList(StreamExtractor& data, QByteArray& reply);
+    ErrorType CmdGetUserInfoList(StreamExtractor& data, QByteArray& reply);
+    ErrorType CmdSetUserInfo(StreamExtractor& data, QByteArray& reply);
     ErrorType CmdRequestSignalingInfos(StreamExtractor& data, QByteArray& reply);
     ErrorType CmdSetRoomDataInternal(StreamExtractor& data, QByteArray& reply);
     ErrorType CmdSetRoomDataExternal(StreamExtractor& data, QByteArray& reply);

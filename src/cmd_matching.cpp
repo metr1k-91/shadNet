@@ -1,5 +1,6 @@
 // SPDX-FileCopyrightText: Copyright 2026 shadNet Project
 // SPDX-License-Identifier: GPL-2.0-or-later
+#include <algorithm>
 #include <QDateTime>
 #include <QDebug>
 #include <QHostAddress>
@@ -1006,6 +1007,129 @@ ErrorType ClientSession::CmdGetRoomDataExternalList(StreamExtractor& data, QByte
 
     qInfo() << "GetRoomDataExternalList:" << m_info.npid << "key=" << m_matching.matchingKey
             << "requested=" << req.room_ids_size() << "found=" << found;
+    return ErrorType::NoError;
+}
+
+ErrorType ClientSession::CmdGetRoomMemberDataExternalList(StreamExtractor& data,
+                                                          QByteArray& reply) {
+    shadnet::GetRoomMemberDataExternalListRequest req;
+    if (!decodeProto(req, data) || data.error())
+        return ErrorType::Malformed;
+
+    shadnet::GetRoomMemberDataExternalListReply rep;
+    bool found = false;
+    {
+        QReadLocker lk(&m_shared->matching.roomsLock);
+        auto roomIt = m_shared->matching.rooms.find({m_matching.matchingKey, req.room_id()});
+        if (roomIt != m_shared->matching.rooms.end()) {
+            found = true;
+            const Room& room = roomIt.value();
+            QList<uint16_t> memberIds = room.members.keys();
+            std::sort(memberIds.begin(), memberIds.end());
+            for (uint16_t memberId : memberIds) {
+                auto memberIt = room.members.constFind(memberId);
+                if (memberIt == room.members.constEnd())
+                    continue;
+                const RoomMember& member = memberIt.value();
+                auto* dst = rep.add_members();
+                dst->set_npid(member.npid.toStdString());
+                dst->set_member_id(member.memberId);
+                dst->set_account_id(static_cast<uint64_t>(member.userId));
+                dst->set_platform(member.platform);
+                dst->set_join_date(member.joinDate);
+                dst->set_role(member.memberId == room.ownerMemberId ? 2 : 1);
+            }
+        }
+    }
+    if (!found)
+        return ErrorType::NotFound;
+
+    appendProto(reply, rep);
+    qInfo() << "GetRoomMemberDataExternalList:" << m_info.npid
+            << "room=" << static_cast<qulonglong>(req.room_id())
+            << "members=" << rep.members_size();
+    return ErrorType::NoError;
+}
+
+ErrorType ClientSession::CmdGetUserInfoList(StreamExtractor& data, QByteArray& reply) {
+    shadnet::GetUserInfoListRequest req;
+    if (!decodeProto(req, data) || data.error())
+        return ErrorType::Malformed;
+
+    shadnet::GetUserInfoListReply rep;
+    int found = 0;
+    {
+        QReadLocker lk(&m_shared->matching.roomsLock);
+        auto roomIt = m_shared->matching.rooms.find({m_matching.matchingKey, m_matching.roomId});
+        for (int i = 0; i < req.npids_size(); ++i) {
+            const QString npid = QString::fromStdString(req.npids(i));
+            auto* user = rep.add_users();
+            user->set_npid(req.npids(i));
+            if (roomIt != m_shared->matching.rooms.end()) {
+                const RoomMember* member = roomIt.value().findByNpid(npid);
+                if (member) {
+                    user->set_account_id(static_cast<uint64_t>(member->userId));
+                    user->set_platform(member->platform);
+                    ++found;
+                }
+            }
+            const auto infoIt =
+                m_shared->matching.userInfo.constFind({m_matching.matchingKey, npid});
+            if (infoIt != m_shared->matching.userInfo.constEnd()) {
+                if (user->account_id() == 0 && npid == m_info.npid) {
+                    user->set_account_id(static_cast<uint64_t>(m_info.userId));
+                    user->set_platform(3);
+                }
+                for (const BinAttrSlot& slot : infoIt.value()) {
+                    if (!slot.set)
+                        continue;
+                    bool wanted = req.attr_ids_size() == 0;
+                    for (int j = 0; !wanted && j < req.attr_ids_size(); ++j)
+                        wanted = static_cast<uint16_t>(req.attr_ids(j)) == slot.attrId;
+                    if (!wanted)
+                        continue;
+                    auto* attr = user->add_user_bin_attrs();
+                    attr->set_attr_id(slot.attrId);
+                    attr->set_data(slot.data.constData(), slot.data.size());
+                }
+                if (user->user_bin_attrs_size() > 0 && user->account_id() == 0)
+                    ++found;
+            }
+        }
+    }
+    appendProto(reply, rep);
+
+    qInfo() << "GetUserInfoList:" << m_info.npid << "requested=" << req.npids_size()
+            << "found=" << found;
+    return ErrorType::NoError;
+}
+
+ErrorType ClientSession::CmdSetUserInfo(StreamExtractor& data, QByteArray& reply) {
+    shadnet::SetUserInfoRequest req;
+    if (!decodeProto(req, data) || data.error())
+        return ErrorType::Malformed;
+
+    QVector<BinAttrSlot> attrs;
+    attrs.reserve(req.user_bin_attrs_size());
+    for (int i = 0; i < req.user_bin_attrs_size(); ++i) {
+        const auto& src = req.user_bin_attrs(i);
+        BinAttrSlot slot;
+        slot.set = true;
+        slot.attrId = static_cast<uint16_t>(src.attr_id());
+        slot.data = QByteArray(src.data().data(), static_cast<int>(src.data().size()));
+        attrs.append(std::move(slot));
+    }
+
+    {
+        QWriteLocker lk(&m_shared->matching.roomsLock);
+        m_shared->matching.userInfo.insert({m_matching.matchingKey, m_info.npid}, std::move(attrs));
+    }
+
+    shadnet::SetUserInfoReply rep;
+    appendProto(reply, rep);
+
+    qInfo() << "SetUserInfo:" << m_info.npid << "server=" << req.server_id()
+            << "binAttrs=" << req.user_bin_attrs_size();
     return ErrorType::NoError;
 }
 
