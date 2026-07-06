@@ -34,6 +34,10 @@ public:
         QReadLocker lk(&m_lock);
         return m_statsEnabled;
     }
+    bool IsMatchingEnabled() const {
+        QReadLocker lk(&m_lock);
+        return m_matchingEnabled;
+    }
     QString GetStatsPort() const {
         QReadLocker lk(&m_lock);
         return m_statsPort;
@@ -98,6 +102,7 @@ private:
     QString m_unsecured_port = "31313";
     QString m_matchingUdpPort = "31314";
     QString m_webapiPort = "31315";
+    bool m_matchingEnabled = true;
     bool m_statsEnabled = true;
     QString m_statsPort = "31320";
     QString m_statsPath = "stats";

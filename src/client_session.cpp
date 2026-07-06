@@ -124,6 +124,29 @@ static bool LeadsWithComId(CommandType cmd) {
         return false;
     }
 }
+
+static bool IsMatchingCommand(CommandType cmd) {
+    switch (cmd) {
+    case CommandType::ContextStart:
+    case CommandType::ContextStop:
+    case CommandType::SetUserInfo:
+    case CommandType::CreateRoom:
+    case CommandType::JoinRoom:
+    case CommandType::LeaveRoom:
+    case CommandType::SearchRoom:
+    case CommandType::GetRoomDataExternalList:
+    case CommandType::GetRoomMemberDataExternalList:
+    case CommandType::GetUserInfoList:
+    case CommandType::RequestSignalingInfos:
+    case CommandType::SetRoomDataInternal:
+    case CommandType::SetRoomDataExternal:
+    case CommandType::KickoutRoomMember:
+    case CommandType::GetWorldInfoList:
+        return true;
+    default:
+        return false;
+    }
+}
 ErrorType ClientSession::DispatchCommand(CommandType cmd, StreamExtractor& se, QByteArray& reply) {
     qDebug() << "Command:" << static_cast<uint16_t>(cmd);
 
@@ -157,6 +180,11 @@ ErrorType ClientSession::DispatchCommand(CommandType cmd, StreamExtractor& se, Q
                 EmitPresenceGameTitleInfo();
         }
     }
+    if (IsMatchingCommand(cmd) && m_shared->config && !m_shared->config->IsMatchingEnabled()) {
+        qInfo() << "Matching disabled: rejecting cmd from" << m_info.npid;
+        return ErrorType::Unsupported;
+    }
+
     // Authenticated commands.
     switch (cmd) {
     case CommandType::Login:

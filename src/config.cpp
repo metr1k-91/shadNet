@@ -49,6 +49,7 @@ void ConfigManager::Parse(const QString& path) {
     m_unsecured_port = str("UnsecuredPort", "31313");
     m_matchingUdpPort = str("MatchingUdpPort", "31314");
     m_webapiPort = str("WebApiPort", "31315");
+    m_matchingEnabled = boolean("MatchingEnabled", true);
     m_statsEnabled = boolean("StatsEnabled", true);
     m_statsPort = str("StatsPort", "31320");
     m_statsPath = str("StatsPath", "stats");
@@ -68,6 +69,8 @@ void ConfigManager::Parse(const QString& path) {
         qInfo() << "Registration requires secret key";
     else
         qInfo() << "Registration is open (no secret key set)";
+
+    qInfo() << "Matching operations" << (m_matchingEnabled ? "enabled" : "disabled");
 
     LoadBannedDomains();
 }
