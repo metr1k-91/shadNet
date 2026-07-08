@@ -175,6 +175,8 @@ ErrorType ClientSession::DispatchCommand(CommandType cmd, StreamExtractor& se, Q
         return CmdRemoveBlock(se);
     case CommandType::SetAppearOffline:
         return CmdSetAppearOffline(se);
+    case CommandType::GetServerFeatures:
+        return CmdGetServerFeatures(reply);
     case CommandType::GetBoardInfos:
         return CmdGetBoardInfos(se, reply);
     case CommandType::RecordScore:
@@ -210,6 +212,8 @@ ErrorType ClientSession::DispatchCommand(CommandType cmd, StreamExtractor& se, Q
         return CmdGetRoomMemberDataExternalList(se, reply);
     case CommandType::GetUserInfoList:
         return CmdGetUserInfoList(se, reply);
+    case CommandType::SendRoomMessage:
+        return CmdSendRoomMessage(se, reply);
     case CommandType::RequestSignalingInfos:
         return CmdRequestSignalingInfos(se, reply);
     case CommandType::SetRoomDataInternal:
@@ -230,6 +234,16 @@ ErrorType ClientSession::DispatchCommand(CommandType cmd, StreamExtractor& se, Q
         qWarning() << "Unknown command" << static_cast<uint16_t>(cmd);
         return ErrorType::Invalid;
     }
+}
+
+ErrorType ClientSession::CmdGetServerFeatures(QByteArray& reply) {
+    shadnet::ServerFeaturesReply rep;
+    rep.set_matching2_enabled(m_shared && m_shared->config &&
+                              m_shared->config->IsMatching2Enabled());
+    appendProto(reply, rep);
+    qInfo() << "GetServerFeatures:" << m_info.npid
+            << "matching2_enabled=" << rep.matching2_enabled();
+    return ErrorType::NoError;
 }
 
 void ClientSession::CleanupOnDisconnect() {

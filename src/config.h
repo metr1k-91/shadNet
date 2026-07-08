@@ -46,6 +46,10 @@ public:
         QReadLocker lk(&m_lock);
         return m_statsCacheLife;
     }
+    bool IsMatching2Enabled() const {
+        QReadLocker lk(&m_lock);
+        return m_matching2Enabled;
+    }
 
     bool IsEmailValidated() const {
         QReadLocker lk(&m_lock);
@@ -99,6 +103,7 @@ private:
     QString m_matchingUdpPort = "31314";
     QString m_webapiPort = "31315";
     bool m_statsEnabled = true;
+    bool m_matching2Enabled = false;
     QString m_statsPort = "31320";
     QString m_statsPath = "stats";
     int m_statsCacheLife = 30; // seconds the stats JSON is cached before recompute

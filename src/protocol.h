@@ -31,22 +31,7 @@ enum class CommandType : uint16_t {
     RemoveFriend = 9,
     AddBlock = 10,
     RemoveBlock = 11,
-    // Matchmaking
-    ContextStart = 12,
-    CreateRoom = 13,
-    JoinRoom = 14,
-    LeaveRoom = 15,
-    SearchRoom = 16,
-    RequestSignalingInfos = 17,
-    ContextStop = 18,
-    SetUserInfo = 19,
-    SetRoomDataInternal = 20,
-    SetRoomDataExternal = 21,
-    KickoutRoomMember = 22,
-    GetWorldInfoList = 23,
-    GetRoomDataExternalList = 24,
-    GetUserInfoList = 25,
-    GetRoomMemberDataExternalList = 26,
+    GetServerFeatures = 12,
     // Scores
     GetBoardInfos = 30,
     RecordScore = 31,
@@ -60,6 +45,23 @@ enum class CommandType : uint16_t {
     GetToken = 39,
     // Presence: mid-session Appear-Offline toggle (payload: SetAppearOfflineRequest).
     SetAppearOffline = 40,
+    // Matchmaking
+    ContextStart = 100,
+    CreateRoom = 101,
+    JoinRoom = 102,
+    LeaveRoom = 103,
+    SearchRoom = 104,
+    RequestSignalingInfos = 105,
+    ContextStop = 106,
+    SetUserInfo = 107,
+    SetRoomDataInternal = 108,
+    SetRoomDataExternal = 109,
+    KickoutRoomMember = 110,
+    GetWorldInfoList = 111,
+    GetRoomDataExternalList = 112,
+    GetUserInfoList = 113,
+    GetRoomMemberDataExternalList = 114,
+    SendRoomMessage = 115,
 };
 
 // Notification type IDs (u16 LE in Notification packet header).
@@ -72,6 +74,7 @@ enum class NotificationType : uint16_t {
     FriendStatus = 8, // A friend came online or went offline
     // Matchmaking
     RoomEvent = 10, // Any room event; Orbis event id carried in the message
+    RoomMessage = 11,
     // Generic NP WebApi push event, forwarded verbatim to the emulator's
     // libSceNpWebApi push-event callbacks. Payload (length-prefixed, see
     // ClientSession::BuildWebApiPushPayload): npServiceName, npServiceLabel(u32 LE),

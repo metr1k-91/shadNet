@@ -209,6 +209,7 @@ public:
     ErrorType CmdGetScoreAccountId(StreamExtractor& data, QByteArray& reply);
     ErrorType CmdGetScoreGameDataByAccId(StreamExtractor& data, QByteArray& reply);
     ErrorType CmdGetToken(QByteArray& reply);
+    ErrorType CmdGetServerFeatures(QByteArray& reply);
 
     // commands cmd_matching.cpp
     ErrorType CmdContextStart(StreamExtractor& data);
@@ -221,6 +222,7 @@ public:
     ErrorType CmdGetRoomMemberDataExternalList(StreamExtractor& data, QByteArray& reply);
     ErrorType CmdGetUserInfoList(StreamExtractor& data, QByteArray& reply);
     ErrorType CmdSetUserInfo(StreamExtractor& data, QByteArray& reply);
+    ErrorType CmdSendRoomMessage(StreamExtractor& data, QByteArray& reply);
     ErrorType CmdRequestSignalingInfos(StreamExtractor& data, QByteArray& reply);
     ErrorType CmdSetRoomDataInternal(StreamExtractor& data, QByteArray& reply);
     ErrorType CmdSetRoomDataExternal(StreamExtractor& data, QByteArray& reply);

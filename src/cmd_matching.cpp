@@ -13,6 +13,39 @@ namespace {
 
 constexpr int32_t MATCHING2_KICKEDOUT_STATUS_CODE = static_cast<int32_t>(0xFF000019u);
 constexpr uint32_t MATCHING2_KICKEDOUT_GUARD_VALUE = 4;
+constexpr uint8_t MATCHING2_CASTTYPE_BROADCAST = 1;
+constexpr uint8_t MATCHING2_CASTTYPE_UNICAST = 2;
+constexpr uint8_t MATCHING2_CASTTYPE_MULTICAST = 3;
+constexpr uint32_t MATCHING2_ROOM_MSG_EVENT_MESSAGE = 0x2102;
+
+int InternalBinIndexForAttr(uint16_t attrId) {
+    if (attrId == Matching2::ORBIS_NP_MATCHING2_ROOM_BIN_ATTR_INTERNAL_1_ID)
+        return 0;
+    if (attrId == Matching2::ORBIS_NP_MATCHING2_ROOM_BIN_ATTR_INTERNAL_2_ID)
+        return 1;
+    return -1;
+}
+
+int ExternalBinIndexForAttr(uint16_t attrId) {
+    if (attrId == Matching2::ORBIS_NP_MATCHING2_ROOM_BIN_ATTR_EXTERNAL_1_ID)
+        return 0;
+    if (attrId == Matching2::ORBIS_NP_MATCHING2_ROOM_BIN_ATTR_EXTERNAL_2_ID)
+        return 1;
+    return -1;
+}
+
+bool AttrWanted(const QVector<uint16_t>& requestedAttrIds, uint16_t attrId) {
+    return requestedAttrIds.isEmpty() || requestedAttrIds.contains(attrId);
+}
+
+template <typename Request>
+QVector<uint16_t> RequestedAttrIds(const Request& req) {
+    QVector<uint16_t> attrIds;
+    attrIds.reserve(req.attr_ids_size());
+    for (int i = 0; i < req.attr_ids_size(); ++i)
+        attrIds.append(static_cast<uint16_t>(req.attr_ids(i)));
+    return attrIds;
+}
 
 uint64_t MatchingTimestampUsec() {
     return static_cast<uint64_t>(QDateTime::currentDateTimeUtc().toMSecsSinceEpoch()) * 1000ull;
@@ -232,7 +265,8 @@ static shadnet::CreateJoinRoomResponse BuildCreateJoinResponse(const Room& room,
     return pb;
 }
 
-static shadnet::MatchingRoomDataExternal BuildRoomDataExternal(const Room& room) {
+static shadnet::MatchingRoomDataExternal BuildRoomDataExternal(
+    const Room& room, const QVector<uint16_t>& requestedAttrIds = {}) {
     shadnet::MatchingRoomDataExternal pb;
     uint16_t memberCount = static_cast<uint16_t>(room.members.size());
     pb.set_max_slot(room.maxSlot);
@@ -253,17 +287,21 @@ static shadnet::MatchingRoomDataExternal BuildRoomDataExternal(const Room& room)
     for (const auto& slot : room.searchIntAttr) {
         if (!slot.set)
             continue;
+        if (!AttrWanted(requestedAttrIds, slot.attrId))
+            continue;
         auto* ia = pb.add_external_search_int_attrs();
         ia->set_attr_id(slot.attrId);
         ia->set_attr_value(slot.value);
     }
-    if (room.searchBinAttr.set) {
+    if (room.searchBinAttr.set && AttrWanted(requestedAttrIds, room.searchBinAttr.attrId)) {
         auto* ba = pb.add_external_search_bin_attrs();
         ba->set_attr_id(room.searchBinAttr.attrId);
         ba->set_data(room.searchBinAttr.data.constData(), room.searchBinAttr.data.size());
     }
     for (const auto& slot : room.externalBinAttr) {
         if (!slot.set)
+            continue;
+        if (!AttrWanted(requestedAttrIds, slot.attrId))
             continue;
         auto* ba = pb.add_external_bin_attrs();
         ba->set_attr_id(slot.attrId);
@@ -474,28 +512,6 @@ ErrorType ClientSession::CmdCreateRoom(StreamExtractor& data, QByteArray& reply)
         room.searchIntAttr[idx].attrId = attrId;
         room.searchIntAttr[idx].value = a.attr_value();
     }
-    if (req.external_search_bin_attrs_size() > 0) {
-        const auto& a = req.external_search_bin_attrs(0);
-        room.searchBinAttr.set = true;
-        room.searchBinAttr.attrId = static_cast<uint16_t>(a.attr_id());
-        room.searchBinAttr.data = QByteArray(a.data().data(), static_cast<int>(a.data().size()));
-    }
-    for (int i = 0; i < req.external_bin_attrs_size(); ++i) {
-        const auto& a = req.external_bin_attrs(i);
-        const uint16_t attrId = static_cast<uint16_t>(a.attr_id());
-        int idx = -1;
-        if (attrId == Matching2::ORBIS_NP_MATCHING2_ROOM_BIN_ATTR_EXTERNAL_1_ID)
-            idx = 0;
-        else if (attrId == Matching2::ORBIS_NP_MATCHING2_ROOM_BIN_ATTR_EXTERNAL_2_ID)
-            idx = 1;
-        if (idx < 0)
-            continue;
-        room.externalBinAttr[idx].set = true;
-        room.externalBinAttr[idx].attrId = attrId;
-        room.externalBinAttr[idx].data =
-            QByteArray(a.data().data(), static_cast<int>(a.data().size()));
-    }
-
     RoomMember owner;
     owner.userId = m_info.userId;
     owner.npid = m_info.npid;
@@ -529,23 +545,54 @@ ErrorType ClientSession::CmdCreateRoom(StreamExtractor& data, QByteArray& reply)
     uint16_t memberId = member->memberId;
     room.ownerMemberId = memberId;
 
-    for (int i = 0; i < req.internal_bin_attrs_size(); ++i) {
-        const auto& a = req.internal_bin_attrs(i);
+    const auto applyCreateBinAttr = [&](const shadnet::MatchingBinAttr& a, const char* source) {
         const uint16_t attrId = static_cast<uint16_t>(a.attr_id());
-        int idx = -1;
-        if (attrId == Matching2::ORBIS_NP_MATCHING2_ROOM_BIN_ATTR_INTERNAL_1_ID)
-            idx = 0;
-        else if (attrId == Matching2::ORBIS_NP_MATCHING2_ROOM_BIN_ATTR_INTERNAL_2_ID)
-            idx = 1;
-        if (idx < 0)
-            continue;
+        const QByteArray attrData(a.data().data(), static_cast<int>(a.data().size()));
 
-        auto& slot = room.internalBinAttr[idx];
-        slot.set = true;
-        slot.attrId = attrId;
-        slot.data = QByteArray(a.data().data(), static_cast<int>(a.data().size()));
-        slot.updateDate = member->joinDate;
-        slot.updateMemberId = memberId;
+        if (const int idx = InternalBinIndexForAttr(attrId); idx >= 0) {
+            auto& slot = room.internalBinAttr[idx];
+            slot.set = true;
+            slot.attrId = attrId;
+            slot.data = attrData;
+            slot.updateDate = member->joinDate;
+            slot.updateMemberId = memberId;
+            qInfo() << "CreateRoom: routed bin attr" << Qt::hex << attrId << Qt::dec << "from"
+                    << source << "to internal room=" << rid << "bytes=" << slot.data.size();
+            return;
+        }
+
+        if (const int idx = ExternalBinIndexForAttr(attrId); idx >= 0) {
+            auto& slot = room.externalBinAttr[idx];
+            slot.set = true;
+            slot.attrId = attrId;
+            slot.data = attrData;
+            qInfo() << "CreateRoom: routed bin attr" << Qt::hex << attrId << Qt::dec << "from"
+                    << source << "to external room=" << rid << "bytes=" << slot.data.size();
+            return;
+        }
+
+        if (attrId == Matching2::ORBIS_NP_MATCHING2_ROOM_SEARCHABLE_BIN_ATTR_EXTERNAL_1_ID) {
+            room.searchBinAttr.set = true;
+            room.searchBinAttr.attrId = attrId;
+            room.searchBinAttr.data = attrData;
+            qInfo() << "CreateRoom: routed bin attr" << Qt::hex << attrId << Qt::dec << "from"
+                    << source << "to search external room=" << rid
+                    << "bytes=" << room.searchBinAttr.data.size();
+            return;
+        }
+
+        qWarning() << "CreateRoom: ignored unexpected bin attr" << Qt::hex << attrId << Qt::dec
+                   << "from" << source << "room=" << rid << "bytes=" << attrData.size();
+    };
+
+    for (int i = 0; i < req.internal_bin_attrs_size(); ++i) {
+        applyCreateBinAttr(req.internal_bin_attrs(i), "internal_bin_attrs");
+    }
+    for (int i = 0; i < req.external_search_bin_attrs_size(); ++i) {
+        applyCreateBinAttr(req.external_search_bin_attrs(i), "external_search_bin_attrs");
+    }
+    for (int i = 0; i < req.external_bin_attrs_size(); ++i) {
+        applyCreateBinAttr(req.external_bin_attrs(i), "external_bin_attrs");
     }
 
     RecomputeRoomSlotCounts(room);
@@ -938,6 +985,7 @@ ErrorType ClientSession::CmdSearchRoom(StreamExtractor& data, QByteArray& reply)
     uint32_t rangeMax = req.range_filter_max();
     if (rangeMax == 0 || rangeMax > 20)
         rangeMax = 20;
+    const QVector<uint16_t> requestedAttrIds = RequestedAttrIds(req);
 
     shadnet::SearchRoomReply rep;
     uint32_t total = 0;
@@ -970,7 +1018,7 @@ ErrorType ClientSession::CmdSearchRoom(StreamExtractor& data, QByteArray& reply)
         uint32_t emitted = 0;
         for (uint32_t i = rangeStart - 1;
              i < static_cast<uint32_t>(matches.size()) && emitted < rangeMax; ++i, ++emitted) {
-            *rep.add_rooms() = BuildRoomDataExternal(*matches[i]);
+            *rep.add_rooms() = BuildRoomDataExternal(*matches[i], requestedAttrIds);
         }
     }
 
@@ -980,8 +1028,9 @@ ErrorType ClientSession::CmdSearchRoom(StreamExtractor& data, QByteArray& reply)
     appendProto(reply, rep);
 
     qInfo() << "SearchRoom:" << m_info.npid << "world=" << worldId << "lobby=" << lobbyId
-            << "key=" << m_matching.matchingKey << "candidates=" << candidateCount
-            << "total=" << total << "returned=" << rep.rooms_size();
+            << "key=" << m_matching.matchingKey << "attrIds=" << requestedAttrIds.size()
+            << "candidates=" << candidateCount << "total=" << total
+            << "returned=" << rep.rooms_size();
     return ErrorType::NoError;
 }
 
@@ -989,6 +1038,7 @@ ErrorType ClientSession::CmdGetRoomDataExternalList(StreamExtractor& data, QByte
     shadnet::GetRoomDataExternalListRequest req;
     if (!decodeProto(req, data) || data.error())
         return ErrorType::Malformed;
+    const QVector<uint16_t> requestedAttrIds = RequestedAttrIds(req);
 
     shadnet::GetRoomDataExternalListReply rep;
     int found = 0;
@@ -999,14 +1049,15 @@ ErrorType ClientSession::CmdGetRoomDataExternalList(StreamExtractor& data, QByte
             auto roomIt = m_shared->matching.rooms.find({m_matching.matchingKey, rid});
             if (roomIt == m_shared->matching.rooms.end())
                 continue;
-            *rep.add_rooms() = BuildRoomDataExternal(roomIt.value());
+            *rep.add_rooms() = BuildRoomDataExternal(roomIt.value(), requestedAttrIds);
             ++found;
         }
     }
     appendProto(reply, rep);
 
     qInfo() << "GetRoomDataExternalList:" << m_info.npid << "key=" << m_matching.matchingKey
-            << "requested=" << req.room_ids_size() << "found=" << found;
+            << "requested=" << req.room_ids_size() << "attrIds=" << requestedAttrIds.size()
+            << "found=" << found;
     return ErrorType::NoError;
 }
 
@@ -1192,6 +1243,89 @@ ErrorType ClientSession::CmdRequestSignalingInfos(StreamExtractor& data, QByteAr
     rep.set_target_member_id(targetMemberId);
     appendProto(reply, rep);
 
+    return ErrorType::NoError;
+}
+
+ErrorType ClientSession::CmdSendRoomMessage(StreamExtractor& data, QByteArray& reply) {
+    shadnet::SendRoomMessageRequest req;
+    if (!decodeProto(req, data) || data.error())
+        return ErrorType::Malformed;
+
+    const uint64_t roomId = req.room_id();
+    const uint8_t castType = static_cast<uint8_t>(req.cast_type());
+    RoomMember srcMember;
+    QVector<QString> targetNpids;
+    QVector<uint16_t> targetMemberIds;
+
+    {
+        QReadLocker lk(&m_shared->matching.roomsLock);
+        auto roomIt = m_shared->matching.rooms.find({m_matching.matchingKey, roomId});
+        if (roomIt == m_shared->matching.rooms.end())
+            return ErrorType::RoomMissing;
+
+        const Room& room = roomIt.value();
+        const RoomMember* src = room.findByNpid(m_info.npid);
+        if (!src)
+            return ErrorType::RoomMissing;
+        srcMember = *src;
+
+        auto addTarget = [&](const RoomMember* target) {
+            if (!target || target->npid == m_info.npid)
+                return;
+            targetNpids.append(target->npid);
+            targetMemberIds.append(target->memberId);
+        };
+        auto addTargetById = [&](uint16_t memberId) {
+            auto it = room.members.find(memberId);
+            if (it != room.members.end())
+                addTarget(&(*it));
+        };
+
+        if (castType == MATCHING2_CASTTYPE_UNICAST) {
+            if (req.dst_member_ids_size() <= 0)
+                return ErrorType::InvalidInput;
+            addTargetById(static_cast<uint16_t>(req.dst_member_ids(0)));
+        } else if (castType == MATCHING2_CASTTYPE_MULTICAST) {
+            for (int i = 0; i < req.dst_member_ids_size(); ++i) {
+                addTargetById(static_cast<uint16_t>(req.dst_member_ids(i)));
+            }
+        } else if (castType == MATCHING2_CASTTYPE_BROADCAST) {
+            for (auto it = room.members.begin(); it != room.members.end(); ++it)
+                addTarget(&(*it));
+        } else {
+            return ErrorType::InvalidInput;
+        }
+    }
+
+    if (targetNpids.isEmpty() &&
+        (castType == MATCHING2_CASTTYPE_UNICAST || castType == MATCHING2_CASTTYPE_MULTICAST)) {
+        return ErrorType::NotFound;
+    }
+
+    shadnet::NotifyRoomMessage notif;
+    notif.set_ctx_id(m_matching.ctxId);
+    notif.set_room_id(roomId);
+    notif.set_src_member_id(srcMember.memberId);
+    notif.set_event(MATCHING2_ROOM_MSG_EVENT_MESSAGE);
+    notif.set_cast_type(castType);
+    notif.set_src_npid(srcMember.npid.toStdString());
+    notif.set_src_account_id(static_cast<uint64_t>(srcMember.userId));
+    notif.set_src_platform(srcMember.platform);
+    notif.set_msg(req.msg());
+    for (const uint16_t memberId : targetMemberIds)
+        notif.add_dst_member_ids(memberId);
+
+    QByteArray notifPayload;
+    appendProto(notifPayload, notif);
+    for (const QString& targetNpid : targetNpids)
+        SendMatchingNotification(NotificationType::RoomMessage, notifPayload, targetNpid);
+
+    qInfo() << "SendRoomMessage:" << m_info.npid << "room=" << roomId << "cast=" << castType
+            << "targets=" << targetNpids.size() << "bytes=" << req.msg().size();
+
+    shadnet::SendRoomMessageReply rep;
+    rep.set_room_id(roomId);
+    appendProto(reply, rep);
     return ErrorType::NoError;
 }
 
