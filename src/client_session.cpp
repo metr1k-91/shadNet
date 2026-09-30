@@ -256,6 +256,8 @@ ErrorType ClientSession::DispatchCommand(CommandType cmd, StreamExtractor& se, Q
         return CmdRequestSignalingInfos(se, reply);
     case CommandType::SetRoomDataInternal:
         return CmdSetRoomDataInternal(se, reply);
+    case CommandType::SetRoomMemberDataInternal:
+        return CmdSetRoomMemberDataInternal(se, reply);
     case CommandType::SetRoomDataExternal:
         return CmdSetRoomDataExternal(se, reply);
     case CommandType::KickoutRoomMember:

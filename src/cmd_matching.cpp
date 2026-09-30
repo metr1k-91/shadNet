@@ -1418,6 +1418,66 @@ ErrorType ClientSession::CmdSetRoomDataInternal(StreamExtractor& data, QByteArra
     return ErrorType::NoError;
 }
 
+ErrorType ClientSession::CmdSetRoomMemberDataInternal(StreamExtractor& data, QByteArray& reply) {
+    shadnet::SetRoomMemberDataInternalRequest req;
+    if (!decodeProto(req, data) || data.error())
+        return ErrorType::Malformed;
+
+    const uint64_t roomId = req.room_id();
+    const uint16_t memberId = static_cast<uint16_t>(req.member_id());
+    shadnet::MatchingRoomMemberData updatedMember;
+    {
+        QWriteLocker lk(&m_shared->matching.roomsLock);
+        auto roomIt = m_shared->matching.rooms.find({m_matching.matchingKey, roomId});
+        if (roomIt == m_shared->matching.rooms.end())
+            return ErrorType::RoomMissing;
+        Room& room = roomIt.value();
+        RoomMember* member = room.findById(memberId);
+        if (!member)
+            return ErrorType::RoomMissing;
+
+        member->teamId = static_cast<uint8_t>(req.team_id());
+        const uint32_t effectiveFilter =
+            req.flag_filter() & ~Matching2::ORBIS_NP_MATCHING2_ROOMMEMBER_FLAG_ATTR_OWNER;
+        member->flagAttr =
+            (member->flagAttr & ~effectiveFilter) | (req.flag_attr() & effectiveFilter);
+
+        const uint64_t now = MatchingTimestampUsec();
+        for (const auto& attr : req.bin_attrs()) {
+            if (attr.attr_id() != Matching2::ORBIS_NP_MATCHING2_ROOMMEMBER_BIN_ATTR_INTERNAL_1_ID) {
+                continue;
+            }
+            member->memberBinAttr.set = true;
+            member->memberBinAttr.attrId = static_cast<uint16_t>(attr.attr_id());
+            member->memberBinAttr.data =
+                QByteArray(attr.data().data(), static_cast<int>(attr.data().size()));
+            member->memberBinAttr.updateDate = now;
+        }
+        updatedMember = BuildRoomMemberData(*member);
+
+        qInfo() << "SetRoomMemberDataInternal: room=" << roomId << "member=" << memberId
+                << "team=" << member->teamId << "flags=" << Qt::hex << member->flagAttr
+                << "binAttrs=" << req.bin_attrs_size();
+    }
+
+    shadnet::NotifyRoomEvent notification;
+    notification.set_ctx_id(m_matching.ctxId);
+    notification.set_room_id(roomId);
+    notification.set_event(
+        Matching2::ORBIS_NP_MATCHING2_ROOM_EVENT_UPDATED_ROOM_MEMBER_DATA_INTERNAL);
+    notification.set_event_cause(Matching2::ORBIS_NP_MATCHING2_EVENT_CAUSE_SERVER_OPERATION);
+    *notification.mutable_member() = updatedMember;
+    QByteArray notificationPayload;
+    appendProto(notificationPayload, notification);
+    NotifyRoomMembers(NotificationType::RoomEvent, notificationPayload, m_matching.matchingKey,
+                      roomId, m_info.npid);
+
+    shadnet::SetRoomMemberDataInternalReply response;
+    response.set_room_id(roomId);
+    appendProto(reply, response);
+    return ErrorType::NoError;
+}
+
 ErrorType ClientSession::CmdSetRoomDataExternal(StreamExtractor& data, QByteArray& reply) {
     shadnet::SetRoomDataExternalRequest req;
     if (!decodeProto(req, data) || data.error())

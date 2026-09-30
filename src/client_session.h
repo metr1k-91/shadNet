@@ -237,6 +237,7 @@ public:
     ErrorType CmdSendRoomMessage(StreamExtractor& data, QByteArray& reply);
     ErrorType CmdRequestSignalingInfos(StreamExtractor& data, QByteArray& reply);
     ErrorType CmdSetRoomDataInternal(StreamExtractor& data, QByteArray& reply);
+    ErrorType CmdSetRoomMemberDataInternal(StreamExtractor& data, QByteArray& reply);
     ErrorType CmdSetRoomDataExternal(StreamExtractor& data, QByteArray& reply);
     ErrorType CmdKickoutRoomMember(StreamExtractor& data, QByteArray& reply);
     ErrorType CmdGetWorldInfoList(StreamExtractor& data, QByteArray& reply);
