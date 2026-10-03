@@ -16,9 +16,10 @@ The server does **not** drive any connection-state machine. There is no symmetri
 
 | Setting | Default | Description |
 |---|---|---|
+| `Matching2Enabled` | `false` | Start the UDP listener when enabled |
 | `MatchingUdpPort` | `31314` | UDP port the STUN server listens on |
 
-Set in `shadnet.cfg`. The STUN server binds to the same `Host` address as the TCP server.
+Set in `shadnet.cfg` next to the executable and restart. The STUN server binds to the same `Host` address as the TCP server (default `127.0.0.1`).
 
 ---
 
@@ -59,7 +60,7 @@ Only one command is handled (`0x01`). Unknown commands are ignored.
 
 NAT-traversal discovery. The client sends its NP ID and local IP; the server replies with the client's external IP and port as seen from the server.
 
-**Request datagram (21 bytes):**
+**Request payload (21 bytes; 27 bytes with the signaling header):**
 ```
 Offset  Size  Field      Description
 ──────  ────  ─────────  ────────────────────────────────────────
@@ -68,7 +69,7 @@ Offset  Size  Field      Description
 17      4     localIp    Client's local IP (network order)
 ```
 
-**Reply datagram (6 bytes):**
+**Reply payload (6 bytes; 12 bytes with the signaling header):**
 ```
 Offset  Size  Field         Description
 ──────  ────  ────────────  ────────────────────────────────────────
@@ -85,7 +86,7 @@ Offset  Size  Field         Description
 
 ## Peer endpoint lookup
 
-Endpoint discovery completes on the TCP side via `RequestSignalingInfos` (matching command 17, documented in matching.md):
+Endpoint discovery completes on the TCP side via `RequestSignalingInfos` (matching command 105, documented in matching.md):
 
 1. Client pings the STUN server (UDP 0x01) → its `udpExt` entry is recorded.
 2. Client calls `RequestSignalingInfos { target_npid }` (TCP).
@@ -105,4 +106,4 @@ Value: (externalIp, externalPort) — QPair<QString, u16>
 Lock:  udpLock (QReadWriteLock)
 ```
 
-Written by `HandleStunPing` (UDP). Read by `RequestSignalingInfos` (TCP) to resolve peer endpoints. An entry is implicitly stale on disconnect and overwritten on the next ping.
+Written by `HandleStunPing` (UDP). Read by `RequestSignalingInfos` (TCP) to resolve peer endpoints. Entries are not removed on disconnect and have no expiry timer. A new ping overwrites the entry; restarting the server clears the map.

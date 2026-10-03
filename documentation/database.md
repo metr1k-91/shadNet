@@ -2,7 +2,7 @@
 
 ## Schema
 
-Default database path: `db/shadnet.db` (relative to the server working directory). The `db/` subdirectory is created automatically by `open()` if it does not exist.
+Database path: `db/shadnet.db`, relative to the executable directory. The `db/` subdirectory is created automatically. Migrations are applied when the database is opened.
 
 ### migration
 
@@ -10,7 +10,7 @@ Tracks which schema migrations have been applied.
 
 ```sql
 CREATE TABLE IF NOT EXISTS migration (
-    migration_id INTEGER PRIMARY KEY,
+    migration_id UNSIGNED INTEGER PRIMARY KEY,
     description  TEXT NOT NULL
 );
 ```
@@ -30,9 +30,13 @@ CREATE TABLE IF NOT EXISTS account (
     email_check TEXT    NOT NULL UNIQUE,
     token       TEXT    NOT NULL,
     reset_token TEXT,
-    admin       BOOL    NOT NULL DEFAULT 0,
-    stat_agent  BOOL    NOT NULL DEFAULT 0,
-    banned      BOOL    NOT NULL DEFAULT 0,
+    admin       BOOL    NOT NULL,
+    stat_agent  BOOL    NOT NULL,
+    banned      BOOL    NOT NULL,
+    ban_reason  TEXT,
+    ban_timestamp INTEGER,
+    client_version TEXT,
+    client_version_at UNSIGNED BIGINT,
     UNIQUE(username COLLATE NOCASE)
 );
 ```
@@ -40,21 +44,25 @@ CREATE TABLE IF NOT EXISTS account (
 | Column        | Type    | Notes                                           |
 | ------------- | ------- | ----------------------------------------------- |
 | `user_id`     | INTEGER | Auto-assigned primary key                       |
-| `username`    | TEXT    | NP ID,case-insensitive unique constraint        |
-| `hash`        | BLOB    | 32-byte  hash                                   |
+| `username`    | TEXT    | NP ID, case-insensitive unique constraint        |
+| `hash`        | BLOB    | 32-byte hash                                   |
 | `salt`        | BLOB    | 64-byte random salt                             |
 | `avatar_url`  | TEXT    | May be empty string                             |
 | `email`       | TEXT    | Original casing preserved                       |
-| `email_check` | TEXT    | `email.toLower()`,used for dedup, unique        |
-| `token`       | TEXT    | 16-char alphanumeric, used for email validation |
-| `reset_token` | TEXT    | Nullable,set only during password reset flow    |
+| `email_check` | TEXT    | `email.toLower().trimmed()`, used for dedup, unique        |
+| `token`       | TEXT    | 16-char alphanumeric account token, used by the game WebAPI and optionally checked at game login |
+| `reset_token` | TEXT    | Nullable, currently unused    |
 | `admin`       | BOOL    | 1 = server administrator                        |
-| `stat_agent`  | BOOL    | 1 = allowed to submit stats                     |
+| `stat_agent`  | BOOL    | Stored flag, currently unused                     |
 | `banned`      | BOOL    | 1 = login rejected                              |
+| `ban_reason` | TEXT | Reason for the ban |
+| `ban_timestamp` | INTEGER | Unix seconds when the ban was set |
+| `client_version` | TEXT | Last reported client version |
+| `client_version_at` | UNSIGNED BIGINT | Unix seconds when the version was updated |
 
 ### account_timestamp
 
-Tracks account lifecycle timestamps. Separate table to avoid locking `account` on every login.
+Tracks account lifecycle timestamps.
 
 ```sql
 CREATE TABLE IF NOT EXISTS account_timestamp (
@@ -68,17 +76,17 @@ CREATE TABLE IF NOT EXISTS account_timestamp (
 
 | Column            | Type             | Notes                                                                                                            |
 | ----------------- | ---------------- | ---------------------------------------------------------------------------------------------------------------- |
-| `user_id`         | UNSIGNED BIGINT  | Foreign key to `account.user_id`                                                                                 |
-| `creation`        | UNSIGNED INTEGER | Unix seconds,set once at account creation                                                                        |
-| `last_login`      | UNSIGNED INTEGER | Unix seconds,updated on each successful login; NULL until first login                                            |
-| `token_last_sent` | UNSIGNED INTEGER | Unix seconds,timestamp of the last email validation token dispatch; used to enforce rate limiting on `SendToken` |
-| `reset_emit`      | UNSIGNED INTEGER | Unix seconds,timestamp of the last password-reset token email; used to enforce rate limiting on `SendResetToken` |
+| `user_id`         | UNSIGNED BIGINT  | Account ID; no foreign-key constraint is declared here                                                                                 |
+| `creation`        | UNSIGNED INTEGER | Unix seconds, set once at account creation                                                                        |
+| `last_login`      | UNSIGNED INTEGER | Unix seconds, updated on each successful game login; NULL until first login                                            |
+| `token_last_sent` | UNSIGNED INTEGER | Legacy field; no email-token dispatch is implemented |
+| `reset_emit`      | UNSIGNED INTEGER | Legacy field; no email-reset flow is implemented |
 
 ---
 
 ### friendship
 
-One row per pair of users that have any relationship,a pending request, a confirmed friendship, or a block. The row is deleted entirely when no flags remain on either side.
+One row per pair of users that have any relationship: a pending request, a confirmed friendship, or a block. The row is deleted entirely when no flags remain on either side.
 
 ```sql
 CREATE TABLE IF NOT EXISTS friendship (
@@ -96,7 +104,7 @@ CREATE INDEX IF NOT EXISTS friendship_user2 ON friendship(user_id_2);
 
 | Column          | Type    | Notes                                                            |
 | --------------- | ------- | ---------------------------------------------------------------- |
-| `user_id_1`     | INTEGER | The lower of the two user IDs,enforced by the `CHECK` constraint |
+| `user_id_1`     | INTEGER | The lower of the two user IDs, enforced by the `CHECK` constraint |
 | `user_id_2`     | INTEGER | The higher of the two user IDs                                   |
 | `status_user_1` | INTEGER | Bitmask of `FriendStatus` flags from `user_id_1`'s perspective   |
 | `status_user_2` | INTEGER | Bitmask of `FriendStatus` flags from `user_id_2`'s perspective   |
@@ -112,8 +120,8 @@ CREATE INDEX IF NOT EXISTS friendship_user2 ON friendship(user_id_2);
 
 | My flags    | Other's flags | State                                        |
 | ----------- | ------------- | -------------------------------------------- |
-| `Friend=1`  | `Friend=0`    | I sent a request,pending acceptance          |
-| `Friend=0`  | `Friend=1`    | They sent me a request,pending my acceptance |
+| `Friend=1`  | `Friend=0`    | I sent a request, pending acceptance          |
+| `Friend=0`  | `Friend=1`    | They sent me a request, pending my acceptance |
 | `Friend=1`  | `Friend=1`    | Mutual friendship                            |
 | `Blocked=1` | any           | I have blocked them                          |
 
@@ -144,17 +152,17 @@ CREATE TABLE IF NOT EXISTS score_table (
 | ------------------- | ------- | --------------------------------------------------------------------------------------------------------------- |
 | `communication_id`  | TEXT    | 12-character PSN Communication ID, e.g. `NPWR12345_00`                                                          |
 | `board_id`          | INTEGER | Board number within the communication ID; games typically use 1, 2, 3…                                          |
-| `rank_limit`        | INTEGER | Maximum number of scores kept on the board; older/worse scores are dropped                                      |
-| `update_mode`       | INTEGER | `0` = NORMAL_UPDATE,only store if the new score is better; `1` = FORCE_UPDATE,always overwrite                  |
-| `sort_mode`         | INTEGER | `0` = DESCENDING,higher score ranks better (most games); `1` = ASCENDING,lower score ranks better (time trials) |
-| `upload_num_limit`  | INTEGER | Max number of score-data file uploads per user                                                                  |
-| `upload_size_limit` | INTEGER | Max bytes per score-data file upload                                                                            |
+| `rank_limit`        | INTEGER | Maximum number of scores in the ranked cache; other database records are retained                                      |
+| `update_mode`       | INTEGER | `0` = NORMAL_UPDATE, store equal or better scores; `1` = FORCE_UPDATE, always overwrite                  |
+| `sort_mode`         | INTEGER | `0` = DESCENDING, higher score ranks better (most games); `1` = ASCENDING, lower score ranks better (time trials) |
+| `upload_num_limit`  | INTEGER | Advertised upload count; not currently enforced                                                                  |
+| `upload_size_limit` | INTEGER | Advertised upload size; not currently enforced                                                                            |
 
 ---
 
 ### score
 
-One row per (communication_id, board_id, user_id, character_id) combination,a player's best score for a specific character slot on a specific board.
+One row per (communication_id, board_id, user_id, character_id) combination, a player's stored score for a specific character slot on a specific board.
 
 ```sql
 CREATE TABLE IF NOT EXISTS score (
@@ -175,7 +183,7 @@ CREATE TABLE IF NOT EXISTS score (
 | ------------------ | ------- | ------------------------------------------------------------------------------------------------------------- |
 | `communication_id` | TEXT    | Matches `score_table.communication_id`                                                                        |
 | `board_id`         | INTEGER | Matches `score_table.board_id`                                                                                |
-| `user_id`          | INTEGER | References `account.user_id`                                                                                  |
+| `user_id`          | INTEGER | Account ID; no foreign-key constraint is declared here                                                                                  |
 | `character_id`     | INTEGER | Character/slot index; games that don't use multiple characters always use `0`                                 |
 | `score`            | INTEGER | The score value; sign and magnitude depend on the game                                                        |
 | `comment`          | TEXT    | Optional player-supplied comment submitted with the score; NULL if omitted                                    |
@@ -185,7 +193,7 @@ CREATE TABLE IF NOT EXISTS score (
 
 **Score lifecycle:**
 
-`RecordScore` inserts or replaces a row depending on `update_mode`. With `NORMAL_UPDATE` the `WHERE excluded.score >= score` (or `<= score` for ASCENDING) clause means the INSERT only takes effect if the new score is better — if not, `numRowsAffected()` returns 0 and the server returns `ScoreNotBest`.
+`RecordScore` inserts or replaces a row depending on `update_mode`. With `NORMAL_UPDATE` the `WHERE excluded.score >= score` (or `<= score` for ASCENDING) clause means the INSERT only takes effect if the new score is equal or better — if not, `numRowsAffected()` returns 0 and the server returns `ScoreNotBest`. An accepted replacement clears any existing score-data attachment.
 
 After a successful `RecordScore`, the client may optionally call `RecordScoreData` to attach a binary blob (replay data, ghost car data, etc.). This writes a file to the `score_data/` directory and sets `data_id` to the file's numeric ID. The `data_id` column stays NULL until that second call is made. `GetScoreData` reads the file back given a player's NP ID.
 
