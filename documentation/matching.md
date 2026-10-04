@@ -8,8 +8,6 @@ Room-based matchmaking. Clients start a matching context, query the world layout
 
 Matchmaking follows the NpMatching2 model. A client establishes a matching context (`ContextStart`), discovers the world layout (`GetWorldInfoList`), then creates or joins rooms. Every room event (a member joining, leaving, being kicked, or room data changing) is delivered to room members through a single unified `RoomEvent` notification that maps directly onto the client's `OrbisNpMatching2RoomEventCallback`.
 
-The server is the source of truth: it holds the full room and member state and ships the complete dataset to clients. The emulator keeps a local cache from those payloads.
-
 ---
 
 ## Scoping by title
@@ -26,7 +24,7 @@ If the title id belongs to a configured group (see `worlds.cfg`), the group name
 
 ## Wire Format
 
-Matching commands and notifications use Protocol Buffers (proto3). Message definitions are in `shadnet.proto`.
+Matching commands and notifications use Protocol Buffers (proto3), including `SendRoomMessage` and `RoomMessage`.
 
 | Direction | Layout |
 |---|---|
@@ -34,7 +32,7 @@ Matching commands and notifications use Protocol Buffers (proto3). Message defin
 | Reply | `ErrorType (u8)` + `u32-LE size` + serialized proto bytes |
 | Notification | `u32-LE size` + serialized proto bytes |
 
-Commands with no meaningful reply body still return a proto message (e.g. `LeaveRoomReply { room_id }`). The error byte is always present first in every reply.
+Most successful commands return a proto message (e.g. `LeaveRoomReply { room_id }`). `ContextStart` and `ContextStop` return only the error byte. The error byte is always present first in every reply.
 
 ---
 
@@ -71,8 +69,8 @@ Stored in `MatchingSharedState::rooms`, keyed by `(matchingKey, roomId)`.
 | `maxSlot` | u16 | Maximum number of members |
 | `ownerMemberId` | u16 | Member ID of the room owner |
 | `serverId` | u16 | Server in the matching hierarchy |
-| `worldId` | u16 | World in the matching hierarchy |
-| `lobbyId` | u16 | Lobby in the matching hierarchy |
+| `worldId` | u32 | World in the matching hierarchy |
+| `lobbyId` | u64 | Lobby in the matching hierarchy |
 | `flagAttr` | u32 | Room flags/settings |
 | `members` | map | Member ID → `RoomMember` |
 | `groups` | list | Team groups (`RoomGroup`) |
@@ -106,7 +104,7 @@ Stored in `MatchingSharedState::rooms`, keyed by `(matchingKey, roomId)`.
 | `natType` | u8 | NAT type |
 | `memberBinAttr` | slot | Per-member internal binary attribute |
 
-The full member record is what the server packs into every room-member event (see `MatchingRoomMemberData`).
+Join and member-data-update events include member attributes. Leave events carry only the member ID and NP ID.
 
 ---
 
@@ -128,7 +126,7 @@ Thread-safe shared state protected by `QReadWriteLock`. Lock ordering: `roomsLoc
 
 ## World configuration (`worlds.cfg`)
 
-A two-section INI file, loaded at startup into `titleGroups` and `worldConfigs`. Absent file → `GetWorldInfoList` returns a single default world.
+A two-section text file with INI-style headings and pipe-separated world records, loaded at startup from beside the executable. Without configured worlds, `GetWorldInfoList` uses worlds from live rooms, or world 1 when none exist.
 
 ```ini
 [groups]
@@ -147,11 +145,11 @@ bloodborne | 1 | 1 | 0 | 0
 
 ## Commands
 
-All matchmaking commands require a prior successful login. Matching command IDs: 12–23.
+All matchmaking commands require a prior successful login. Matching command IDs: 100–116.
 
 ---
 
-### ContextStart (12)
+### ContextStart (100)
 
 Establish the matching context for this session. Sent by the emulator when the game starts a context.
 
@@ -163,7 +161,7 @@ Stores `ctxId` on the session and marks it initialized. The reply drives the emu
 
 ---
 
-### ContextStop (18)
+### ContextStop (106)
 
 Tear down the matching context.
 
@@ -171,11 +169,11 @@ Tear down the matching context.
 
 **Reply:** `ErrorType(u8)` only.
 
-Clears the session's `ctxId` / initialized flag. The reply drives the emulator's `CONTEXT_EVENT_STOPPED` callback.
+Clears the session's `ctxId` / initialized flag. The reply drives the emulator's `CONTEXT_EVENT_STOPPED` callback. Call `LeaveRoom` first; stopping the context does not leave the room.
 
 ---
 
-### CreateRoom (13)
+### CreateRoom (101)
 
 Create a new room with the caller as owner and sole member.
 
@@ -198,11 +196,11 @@ Create a new room with the caller as owner and sole member.
 
 **Reply:** `ErrorType(u8)` + `CreateRoomReply` proto (room_id, server/world/lobby, member_id, max_slots, flags, cur_members, and `details` = `CreateJoinRoomResponse` with full room data + member list).
 
-**State update:** session `roomId`, `myMemberId = 1`, `isRoomOwner = true`. The room is indexed under `(matchingKey, roomId)` and its world.
+**State update:** session `roomId`, returned `myMemberId`, `isRoomOwner = true`. The room is indexed under `(matchingKey, roomId)` and its world, or its lobby when the world is zero.
 
 ---
 
-### JoinRoom (14)
+### JoinRoom (102)
 
 Join an existing room.
 
@@ -210,17 +208,16 @@ Join an existing room.
 
 **Reply:** `ErrorType(u8)` + `JoinRoomReply` proto (room_id, member_id, max_slots, flags, cur_members, `details` = `CreateJoinRoomResponse`).
 
-**Validation:** room must exist and not be full; the joiner must not already be a member.
+**Validation:** room must exist and not be full; the joiner must not already be a member. Admission also checks allow/block lists. Password and group-label matching are not currently enforced.
 
 **Notifications pushed:**
 - **RoomEvent** `MEMBER_JOINED (0x1101)` to existing members — carries the full joining member.
-- **RoomEvent** `UPDATED_ROOM_DATA_INTERNAL (0x1106)` to the joiner — the room's current internal binary attributes.
 
 **State update:** session `roomId`, `myMemberId`, `isRoomOwner = false`.
 
 ---
 
-### LeaveRoom (15)
+### LeaveRoom (103)
 
 Leave the current room.
 
@@ -231,24 +228,24 @@ Leave the current room.
 **Leave logic (also triggered on disconnect):**
 1. Remove self from room members.
 2. If the room is now empty, destroy it (and remove it from the world/lobby indices).
-3. If the leaver was the owner, transfer ownership via `ownerSuccession` (fallback: first remaining member). @TODO SCENPMATCHING2GRANTROOMOWNER
+3. If the leaver was the owner, transfer ownership via `ownerSuccession` (fallback: first remaining member).
 
 **Notifications pushed:**
 - **RoomEvent** `MEMBER_LEFT (0x1102)` to remaining members, cause `LEAVE_ACTION`.
 
 ---
 
-### GetRoomList (16)
+### SearchRoom (104)
 
 Retrieve rooms for a world/lobby in this matching key, filtered by attributes.
 
-**Request:** `GetRoomListRequest` (world_id, lobby_id, range filters, attribute filters).
+**Request:** `SearchRoomRequest` (world_id, lobby_id, range filters, attribute filters).
 
-**Reply:** `ErrorType(u8)` + `GetRoomListReply` (`rooms` = repeated `MatchingRoomDataExternal`, plus range_start/total/result). Candidates are taken from `worldRooms`/`lobbyRooms` for the caller's matching key and passed through the request filters.
+**Reply:** `ErrorType(u8)` + `SearchRoomReply` (`rooms` = repeated `MatchingRoomDataExternal`, plus range_start/total/result). Candidates are taken from `worldRooms`/`lobbyRooms` for the caller's matching key and passed through the request filters.
 
 ---
 
-### RequestSignalingInfos (17)
+### RequestSignalingInfos (105)
 
 Look up a peer's UDP endpoint for P2P. On-demand only — no signaling state machine.
 
@@ -258,15 +255,15 @@ Look up a peer's UDP endpoint for P2P. On-demand only — no signaling state mac
 
 **Endpoint resolution order:**
 1. `udpExt` map (populated by STUN ping).
-2. Fallback: search the caller's rooms for a member with that npid.
+2. Fallback: search rooms under the caller's matching key for a member with that npid.
 
 No notifications.
 
 ---
 
-### SetRoomDataInternal (20)
+### SetRoomDataInternal (108)
 
-Update the room's internal binary attributes and flags. Typically called by the owner.
+Update the room's internal binary attributes and flags. The handler does not require the caller to own or belong to the room.
 
 **Request:** `SetRoomDataInternalRequest` (req_id, room_id, flag_filter, flag_attr, bin_attrs, optional passwd_slot_mask).
 
@@ -279,7 +276,7 @@ Update the room's internal binary attributes and flags. Typically called by the 
 
 ---
 
-### SetRoomDataExternal (21)
+### SetRoomDataExternal (109)
 
 Update the room's searchable/external attributes (room-discovery metadata).
 
@@ -289,7 +286,7 @@ Update the room's searchable/external attributes (room-discovery metadata).
 
 ---
 
-### KickoutRoomMember (22)
+### KickoutRoomMember (110)
 
 Remove a member from the room. Owner only.
 
@@ -303,7 +300,7 @@ Remove a member from the room. Owner only.
 
 ---
 
-### GetWorldInfoList (23)
+### GetWorldInfoList (111)
 
 Retrieve the world layout for a server id.
 
@@ -317,11 +314,12 @@ For the caller's matching key: if `worldConfigs` has configured worlds, those ar
 
 ## Notifications
 
-Matchmaking uses a **single** notification type. The server pushes `PacketType::Notification` packets; no reply is expected.
+Matchmaking uses **two** notification types, both protobuf. The server pushes `PacketType::Notification` packets; no reply is expected.
 
 | Value | Name | Proto message | Description |
 |---|---|---|---|
 | `10` | `RoomEvent` | `NotifyRoomEvent` | Any room event (mapped to the room-event callback) |
+| `11` | `RoomMessage` | `NotifyRoomMessage` | Messages sent with `SendRoomMessage` (115) |
 
 ### RoomEvent (10)
 
@@ -331,40 +329,34 @@ Every room event maps onto `OrbisNpMatching2RoomEventCallback(ctxId, roomId, eve
 
 | Field | Type | Description |
 |---|---|---|
-| `ctx_id` | uint32 | Owning matching context |
+| `ctx_id` | uint32 | Context of the session that sends the event |
 | `room_id` | uint64 | Room involved |
 | `event` | uint32 | Orbis room event id (`0x11xx`) |
 | `event_cause` | uint32 | `OrbisNpMatching2EventCause` |
 | `error_code` | int32 | Result/status code (room-update events) |
-| `member` | `MatchingRoomMemberData` | Full member (member events) |
+| `member` | `MatchingRoomMemberData` | Member data; fields depend on the event |
 | `bin_attrs` | repeated `MatchingBinAttr` | Updated attrs (room-data-updated) |
 | `flags` | uint32 | Updated room flags (room-data-updated) |
+| `has_passwd_mask` | bool | Whether a private-slot mask is included |
+| `passwd_slot_mask` | uint64 | Updated private-slot mask |
 
 **Event ids:**
 
 | `event` | Meaning | Carries |
 |---|---|---|
 | `0x1101` | MEMBER_JOINED | full `member`, cause `SERVER_OPERATION` |
-| `0x1102` | MEMBER_LEFT | full `member`, cause `LEAVE_ACTION` or `KICKOUT_ACTION` |
+| `0x1102` | MEMBER_LEFT | member ID and NP ID, cause `LEAVE_ACTION` or `KICKOUT_ACTION` |
 | `0x1103` | KICKEDOUT | `error_code`, cause `KICKOUT_ACTION` |
 | `0x1106` | UPDATED_ROOM_DATA_INTERNAL | `flags` + `bin_attrs` |
+| `0x1107` | UPDATED_ROOM_MEMBER_DATA_INTERNAL | updated `member` |
 
-`MatchingRoomMemberData` carries the **complete** member: npid, member_id, team_id, is_owner, group_id, nat_type, flag_attr, join_date, addr/port, and `bin_attrs_internal`. The emulator stores this in its local room cache and forwards it directly to the callback.
+`MatchingRoomMemberData` can carry npid, member_id, team_id, is_owner, group_id, nat_type, flag_attr, join_date, addr/port, account_id, platform, and `bin_attrs_internal`. The populated fields depend on the event.
 
 ---
 
 ## Disconnect Cleanup
 
-When a client disconnects (TCP closed), the server automatically:
+When a client disconnects with its matching context still initialized, the server:
 1. Calls `DoLeaveRoom` if the client is in a room — notifying remaining members via `RoomEvent` `MEMBER_LEFT`.
 2. Transfers room ownership if the disconnecting client was the owner.
 3. Destroys the room if it becomes empty.
-
----
-
-## Thread Safety
-
-- All shared matchmaking state is protected by `QReadWriteLock`.
-- Room IDs are allocated via `atomic fetch_add`.
-- Lock ordering is always `roomsLock` before `clientsLock`.
-- Each `ClientSession` runs in its own `QThread`. Notifications to other sessions are marshaled onto the target session's thread via `QMetaObject::invokeMethod`.

@@ -1,8 +1,8 @@
 # ShadNet Wire Protocol Reference
 
-Complete specification of the binary protocol spoken between clients and the shadnet server. All multi-byte integers are **little-endian**.
+Reference for the binary protocol spoken between clients and the shadnet server. Header fields and raw fixed-width integers are **little-endian**. Protobuf fields use protobuf wire encoding.
 
-**Encoding note:** account and friend commands use **Protocol Buffers 3** (protobuf3) for all payloads. Score commands have always used protobuf3. The only commands that still use raw null-terminated strings are `Delete (3)`, `Terminate (1)`, and the inner fields of `ServerInfo`. See the [Encoding Reference](#encoding-reference) section for protobuf wire-format details.
+**Encoding note:** most account and friend commands use **Protocol Buffers 3** (protobuf3). `Delete (3)` uses raw null-terminated strings; `Terminate (1)` has no request body. `ServerInfo` contains a raw u32. Score commands combine protobuf messages with raw fields.
 
 ---
 
@@ -73,7 +73,7 @@ Server-initiated push packet. No reply is expected or sent.
 [1-2]   type    (u16 LE)    NotificationType
 [3-6]   size    (u32 LE)    15 + payload length
 [7-14]  0x00 × 8            packetId = 0 (unused)
-[15+]   payload             u32 LE blob size + protobuf bytes (see Notifications)
+[15+]   payload             Type-specific encoding (see Notifications)
 ```
 
 The client must read and discard any notification type it does not recognise.
@@ -90,11 +90,13 @@ Sent by the server immediately upon connection, before any command is exchanged.
 [15-18] 0x01 0x00 0x00 0x00 PROTOCOL_VERSION = 1 (u32 LE)
 ```
 
-If the received version does not equal `PROTOCOL_VERSION` the client must close the connection immediately.
+Clients should reject unsupported protocol versions. The current version is still 1 and does not distinguish the older matchmaking command map.
 
 ---
 
 ## Commands
+
+Only `Login`, `Create`, and `Terminate` are accepted before login. Other commands return `Unauthorized`. A `Malformed` reply is followed by a disconnect.
 
 ### Protobuf payload convention
 
@@ -119,7 +121,10 @@ Authenticate an existing account. On success the session transitions to authenti
 message LoginRequest {
     string npid     = 1;   // NP ID (username)
     string password = 2;   // Password in plaintext (hashed server-side)
-    string token    = 3;   // Email validation token; omit or leave empty if not required
+    string token    = 3;   // Account token; required when EmailValidated=true
+    string title_id = 4;   // Running title serial (CUSAxxxxx)
+    string title_name = 5; // Running title's display name
+    bool appear_offline = 6; // Appear offline to other users
 }
 ```
 
@@ -135,14 +140,14 @@ message FriendEntry {
 message LoginReply {
     string               avatar_url               = 1;  // Avatar URL (may be empty)
     uint64               user_id                  = 2;  // Server-assigned account ID
-    repeated FriendEntry friends                  = 4;  // Mutual friends
-    repeated string      friend_requests_sent     = 5;  // Pending outgoing requests
-    repeated string      friend_requests_received = 6;  // Pending incoming requests
-    repeated string      blocked                  = 7;  // Blocked users
+    repeated FriendEntry friends                  = 3;  // Mutual friends
+    repeated string      friend_requests_sent     = 4;  // Pending outgoing requests
+    repeated string      friend_requests_received = 5;  // Pending incoming requests
+    repeated string      blocked                  = 6;  // Blocked users
 }
 ```
 
-> **Note:** field number 3 is intentionally absent from `LoginReply` — it was previously used for `online_name` which has been removed. The NP ID itself serves as the display name on PS4.
+> **Note:** the NP ID itself serves as the display name on PS4. Login requires the registered casing, even though account names are unique ignoring case.
 
 All four list fields are always present in the decoded message, even when empty. The client must not assume any list is non-empty before iterating.
 
@@ -152,8 +157,7 @@ All four list fields are always present in the decoded message, even when empty.
 
 | Error                  | Cause                                                  |
 | ---------------------- | ------------------------------------------------------ |
-| `LoginInvalidPassword` | NP ID not found, or password does not match            |
-| `LoginInvalidToken`    | `EmailValidated = true` and token is empty or wrong    |
+| `LoginInvalidPassword` | NP ID not found, casing differs, password does not match, or the required token is empty/wrong |
 | `LoginAlreadyLoggedIn` | Another session for this `userId` is already connected |
 | `LoginError`           | Account exists but is banned                           |
 | `Malformed`            | Proto blob could not be parsed                         |
@@ -174,13 +178,13 @@ Allowed both before and after login.
 
 ### Create (2)
 
-Register a new account. The server always closes the connection after sending the reply.
+Register a new account. The connection stays open after the reply; registration does not authenticate the session.
 
 **Request payload:** proto blob of `RegistrationRequest`
 
 ```protobuf
 message RegistrationRequest {
-    string npid       = 1;   // NP ID; 1–16 chars, alphanumeric + underscore + hyphen
+    string npid       = 1;   // NP ID; 3–16 chars, letters/digits + underscore + hyphen
     string password   = 2;   // Password
     string avatar_url = 3;   // Optional; server uses a default avatar if empty
     string email      = 4;   // Valid email address
@@ -203,11 +207,11 @@ The NP ID is used as the display name — there is no separate `online_name` fie
 | ----------------------------- | ---------------------------------------------------------------- |
 | `NoError`                     | Account created                                                  |
 | `Unauthorized`                | `secret_key` does not match the server's `RegistrationSecretKey` |
-| `InvalidInput`                | NP ID failed format validation, or email address is malformed    |
+| `InvalidInput`                | NP ID failed validation, or password/email is empty              |
 | `CreationExistingUsername`    | NP ID already registered (case-insensitive)                      |
 | `CreationExistingEmail`       | Email address already in use                                     |
 | `CreationBannedEmailProvider` | Email domain is on the server's banned domain list               |
-| `CreationError`               | Database insert failed (see server log for details)              |
+| `CreationError`               | Account creation failed, including a rejected email format       |
 | `Malformed`                   | Proto blob could not be parsed                                   |
 
 ---
@@ -343,9 +347,9 @@ Clears `Blocked` on the caller's side. Unblocking does **not** restore a friends
 
 ## NPScore Commands
 
-All NPScore commands require login. Every request payload begins with a raw 12-byte **Communication ID** (`comId`) followed by a proto blob. The server reads the ComId with `getBytes(12)` and the protobuf blob with `getRawData()`.
+All NPScore commands require login. Every request payload begins with a raw 12-byte **Communication ID** (`comId`). Most then carry a proto blob; `GetBoardInfos` uses a raw u32 board ID, and `RecordScoreData` adds a raw data blob after its protobuf request.
 
-Reply blobs that carry data are also `u32 LE` size + proto bytes.
+`RecordScore` returns a raw u32 rank. Score-data downloads return a length-prefixed raw blob. Other replies carrying messages use `u32 LE` size + proto bytes.
 
 ---
 
@@ -366,7 +370,7 @@ message BoardInfo {
     uint32 updateMode      = 2;   // 0=NORMAL_UPDATE, 1=FORCE_UPDATE
     uint32 sortMode        = 3;   // 0=DESCENDING, 1=ASCENDING
     uint32 uploadNumLimit  = 4;
-    uint32 uploadSizeLimit = 5;
+    uint64 uploadSizeLimit = 5;
 }
 ```
 
@@ -406,7 +410,7 @@ rank (u32 LE)   — 1-based position; rankLimit+1 = did not make the board
 
 ### RecordScoreData (32)
 
-Attach a binary game-data blob to the most recently recorded score. Must be called immediately after a successful `RecordScore`.
+Attach a binary game-data blob to a recorded score. The score must be in the ranked cache and have no attachment; an immediately preceding `RecordScore` is not required.
 
 **Request payload:**
 
@@ -425,7 +429,7 @@ data     (raw bytes)
 message RecordScoreGameDataRequest {
     uint32 boardId = 1;
     int32  pcId    = 2;
-    int64  score   = 3;   // must match the score from the preceding RecordScore
+    int64  score   = 3;   // must match the stored score
 }
 ```
 
@@ -494,6 +498,7 @@ message ScoreRankData {
     int64  score       = 4;
     bool   hasGameData = 5;
     uint64 recordDate  = 6;   // microseconds since CE epoch (0001-01-01)
+    int64  accountId   = 7;
 }
 
 message ScoreInfo {
@@ -581,28 +586,26 @@ message GetScoreNpIdRequest {
 | `5`   | `LoginError`                  | Generic login failure (account banned)                      |
 | `6`   | `LoginAlreadyLoggedIn`        | A session for this account is already active                |
 | `7`   | `LoginInvalidUsername`        | *(unused — folded into `LoginInvalidPassword`)*             |
-| `8`   | `LoginInvalidPassword`        | NP ID not found, or password hash mismatch                  |
-| `9`   | `LoginInvalidToken`           | Email validation token missing or incorrect                 |
-| `10`  | `CreationError`               | Database insert failed during account creation              |
+| `8`   | `LoginInvalidPassword`        | NP ID, casing, password, or required token does not match   |
+| `10`  | `CreationError`               | Account creation failed                                    |
 | `11`  | `CreationExistingUsername`    | NP ID already registered                                    |
 | `12`  | `CreationBannedEmailProvider` | Email domain is banned                                      |
 | `13`  | `CreationExistingEmail`       | Email address already registered                            |
 | `23`  | `Unauthorized`                | Requires authentication, or `secret_key` mismatch on Create |
 | `24`  | `DbFail`                      | Database query failed                                       |
-| `25`  | `EmailFail`                   | Failed to send email                                        |
 | `26`  | `NotFound`                    | Requested resource does not exist                           |
 | `27`  | `Blocked`                     | A block exists on one or both sides                         |
 | `28`  | `AlreadyFriend`               | Friend request already sent, or already friends             |
 | `29`  | `ScoreNotBest`                | Score rejected — better score already recorded              |
 | `30`  | `ScoreInvalid`                | Score value does not match stored entry                     |
 | `31`  | `ScoreHasData`                | Score entry already has game data attached                  |
-| `33`  | `Unsupported`                 | Command recognised but not implemented                      |
+| `33`  | `Unsupported`                 | Feature disabled; returned by disabled trophy commands      |
 
 ---
 
 ## Notifications
 
-Notifications are `PacketType::Notification` (type `0x02`) packets pushed asynchronously after login. All notification payloads are **proto blobs** (u32 LE size + protobuf bytes) — the same framing as command payloads.
+Notifications are `PacketType::Notification` (type `0x02`) packets pushed asynchronously after login. Friend and room payloads are **proto blobs** (u32 LE size + protobuf bytes). `WebApiPushEvent` uses a custom binary payload.
 
 **NotificationType values:**
 
@@ -611,7 +614,10 @@ Notifications are `PacketType::Notification` (type `0x02`) packets pushed asynch
 | `5`   | `FriendQuery`  | Someone sent you a friend request    |
 | `6`   | `FriendNew`    | A mutual friendship has been formed  |
 | `7`   | `FriendLost`   | Someone removed you or was blocked   |
-| `8`   | `FriendStatus` | A friend came online or went offline |
+| `8`   | `FriendStatus` | A friend's online status changed    |
+| `10`  | `RoomEvent`    | Room membership or data changed     |
+| `11`  | `RoomMessage`  | A protobuf room message             |
+| `17`  | `WebApiPushEvent` | A game WebAPI event; custom binary payload |
 
 ---
 
@@ -654,7 +660,7 @@ message NotifyFriendLost {
 
 ### FriendStatus (8)
 
-Pushed to all **online friends** when a user logs in or disconnects.
+Pushed to **online friends** when a user's visible online status changes, including changes to the appear-offline setting.
 
 ```protobuf
 message NotifyFriendStatus {
@@ -662,87 +668,4 @@ message NotifyFriendStatus {
     bool   online    = 2;   // true = came online, false = went offline
     uint64 timestamp = 3;   // nanoseconds since Unix epoch
 }
-```
-
----
-
-## Encoding Reference
-
-### Integers
-
-All integers are stored little-endian with no padding.
-
-| C++ type | Size | Example value | Wire bytes                |
-| -------- | ---- | ------------- | ------------------------- |
-| `u8`     | 1    | `30`          | `1E`                      |
-| `u16`    | 2    | `256`         | `00 01`                   |
-| `u32`    | 4    | `19`          | `13 00 00 00`             |
-| `u64`    | 8    | `1`           | `01 00 00 00 00 00 00 00` |
-
-### Protobuf blob framing
-
-Every protobuf payload sent over this protocol is length-prefixed:
-
-```
-size   (u32 LE)   — byte length of the serialised protobuf message
-data   (bytes)    — protobuf3 serialised bytes
-```
-
-The server writes this with `appendBlob(buf, serialised)` which calls `appendU32LE(size)` then `buf.append(data)`. The client reads it with `ExtractBlob(payload, pos)` which reads the u32 length then extracts that many bytes for `ParseFromString`.
-
-### Packet ID assignment
-
-The client assigns a monotonically increasing `packetId` starting from any non-zero value. The server echoes it verbatim in the Reply.
-
-### Annotated Login request example
-
-```
-00                         ← PacketType::Request
-00 00                      ← CommandType::Login (0)
-28 00 00 00                ← size = 40 bytes total
-01 00 00 00 00 00 00 00    ← packetId = 1
-
-— proto blob —
-10 00 00 00                ← blob size = 16 bytes (u32 LE)
-0a 06 67 65 6f 72 67 65    ← field 1 (npid):     "george"
-12 06 73 65 63 72 65 74    ← field 2 (password): "secret"
-                           ← field 3 (token) omitted — empty string is proto3 default
-```
-
-### Annotated Login reply example (success, no friends)
-
-```
-01                         ← PacketType::Reply
-00 00                      ← CommandType::Login (0)
-24 00 00 00                ← size = 36 bytes total
-01 00 00 00 00 00 00 00    ← packetId = 1 (echoed)
-00                         ← ErrorType::NoError
-
-— proto blob —
-0b 00 00 00                ← blob size = 11 bytes (u32 LE)
-0a 00                      ← field 1 (avatar_url): "" (empty — technically omitted but shown)
-10 01                      ← field 2 (user_id):    1
-                           ← fields 4-7 omitted — all empty lists are proto3 default
-```
-
-> Note: `onlineName` does not appear in the reply. The NP ID the client sent in the request is used as the display name.
-
-### Annotated Create request example (with secret key)
-
-```
-00                         ← PacketType::Request
-02 00                      ← CommandType::Create (2)
-3c 00 00 00                ← size = 60 bytes total
-01 00 00 00 00 00 00 00    ← packetId = 1
-
-— proto blob —
-25 00 00 00                ← blob size = 37 bytes (u32 LE)
-0a 06 53 68 61 64 6f 77    ← field 1 (npid):       "Shadow"
-12 04 31 32 33 34          ← field 2 (password):   "1234"
-                           ← field 3 (avatar_url) omitted
-22 12 73 68 61 64 6f 77    ← field 4 (email):      "shadow@test.local"
-   40 74 65 73 74 2e 6c
-   6f 63 61 6c
-2a 09 4d 79 53 65 63 72    ← field 5 (secret_key): "MySecret"
-   65 74
 ```

@@ -1,7 +1,7 @@
 # shadNet
 Custom online server for shadPS4.
 
-Based on RPCSN implementation, but in C++. If anyone wonders why QT, it's because it has all the necessary components out of the box.
+Based on RPCSN implementation, but in C++. If anyone wonders why Qt, it's because it has all the necessary components out of the box.
 
 ## Building
 ### Prerequisites
@@ -19,57 +19,101 @@ database layer.
 
 ### 1. Clone with submodules
 
-The `externals/protobuf` submodule is required — the build will not configure
-without it.
+The `externals/protobuf` and `externals/abseil-cpp` submodules are required.
 
 ```bash
-git clone --recursive https://github.com/<owner>/shadNet.git
+git clone --recursive https://github.com/shadps4-emu/shadNet.git
 cd shadNet
 # already cloned without --recursive?
 git submodule update --init --recursive
 ```
 
 ### 2. Install Qt6
-**Linux (Ubuntu):**
+**Linux:** install a Qt6 desktop kit with HTTP Server and WebSockets, using
+the Qt installer or `aqtinstall`. Set `QTDIR` to that
+kit's directory. The Ubuntu package commands below install build tools;
+they do not select a Qt kit.
 
 ```bash
 sudo apt-get update
-# Add LLVM repository
-wget -qO - https://apt.llvm.org/llvm-snapshot.gpg.key | sudo apt-key add -
-sudo add-apt-repository 'deb http://apt.llvm.org/noble/ llvm-toolchain-noble-19 main'
-# Install dependencies
-sudo apt-get install -y ninja-build mold clang-19 qt6-base-dev libqt6sql6-sqlite
-sudo apt install qt6-base-dev qt6-httpserver-dev qt6-websockets-dev
+sudo apt-get install -y cmake ninja-build g++
+# Replace this with your installed Qt kit.
+export QTDIR="$HOME/Qt/<version>/gcc_64"
 ```
 
 **Windows:** install Qt6 for `win64_msvc2022_64` (with the `qthttpserver` and
-`qtwebsockets` modules) plus Visual Studio 2022, and set
-`QTDIR`/`CMAKE_PREFIX_PATH` to the Qt kit directory.
+`qtwebsockets` modules) plus the Visual Studio 2022 C++ build tools. Set
+`QTDIR`/`CMAKE_PREFIX_PATH` to the Qt kit directory, for example
+`C:\Qt\<version>\msvc2022_64`.
 
 ### 3. Configure & build
+
+**Linux:**
+
 ```bash
-cmake -G Ninja -B build -DCMAKE_BUILD_TYPE=Release
+cmake -S . -G Ninja -B build -DCMAKE_BUILD_TYPE=Release -DCMAKE_PREFIX_PATH="$QTDIR"
 cmake --build build --config Release --parallel
 ```
 
+**Windows (VS Code with CMake Tools):**
+
+1. Open the repository folder in VS Code and install the **CMake Tools** extension.
+2. Run **CMake: Select a Kit** and choose the Visual Studio 2022 **amd64** kit.
+   CMake Tools sets up the compiler and Windows SDK; no Developer PowerShell is needed.
+3. In workspace settings, set **CMake: Build Directory** to `${workspaceFolder}/build`,
+   **CMake: Generator** to `Ninja`, and add `CMAKE_PREFIX_PATH` under
+   **CMake: Configure Settings**, pointing to your Qt kit (for example,
+   `C:/Qt/<version>/msvc2022_64`).
+4. Run **CMake: Select Variant**, choose **Release**, then run **CMake: Configure**
+   and **CMake: Build**.
+
+To copy the Qt runtime files, open a regular **Command Prompt** in the repository
+folder and run:
+
+```cmd
+rem Replace this with your installed Qt kit.
+set "QTDIR=C:\Qt\<version>\msvc2022_64"
+"%QTDIR%\bin\windeployqt6.exe" --release --no-translations .\build\shadnet.exe
+```
+
+Some Qt installations name the deployment tool `windeployqt.exe`. Use the
+one supplied with the kit you built against. It copies Qt DLLs and plugins,
+including `sqldrivers/qsqlite.dll`, beside the executable. On Linux, keep the
+matching Qt shared libraries and SQL driver available through your Qt installation.
+
 ### 4. Run
 
+Copy the supplied world and leaderboard definitions next to the executable.
+
+**Windows:** in File Explorer, copy `worlds.cfg` and `scoreboards.cfg` into
+the `build` folder, then double-click `shadnet.exe` to start the server.
+
+**Linux:**
+
 ```bash
+cp worlds.cfg scoreboards.cfg build/
 ./build/shadnet
 ```
 
 On first start the server writes a `shadnet.cfg` (INI format) next to the
-binary and listens on the configured ports (defaults: TCP `31313` for the game
-protocol, UDP `31314` for matchmaking/STUN, TCP `31315` for the WebAPI).
+binary. Configuration and data paths are relative to the executable directory.
+Defaults bind to `127.0.0.1`: TCP `31313` for the game protocol, `31315` for
+the WebAPI, `31320` for stats, and `31350` for the admin API. UDP signaling
+is disabled by default; set `Matching2Enabled=true` to start UDP `31314`.
 
-## Creating an account
+### Using the member manager
 
-shadNet is a **server**, so there is no web signup page or `curl` endpoint
-(the WebAPI only exposes `/status`). Accounts are created by a **client** that
-connects over the game protocol and sends a `Create` command. In normal use
-that client is shadPS4 itself. To create an account manually, use the bundled
-reference client in [`clientsample/`](clientsample/), which exposes a
-`register` command.
+The `membertool` directory contains a small Qt GUI for adding and removing
+accounts. Open it as a separate CMake project and build
+`shadnet-member-manager` with your Qt kit (Core, Sql, and Widgets).
+On Windows, copy its Qt runtime files with `windeployqt6.exe` as above.
+
+Stop the server, open the tool, and choose the server's `db/shadnet.db`.
+Enter a username and click **Create member**. The tool generates a password,
+uses `<username>@shadps4.local` for the email, and writes the account to the
+database. Copy the login details before closing. To remove an account,
+select it in the list and click **Remove selected member**. Restart the
+server when finished.
 
 ### Using the sample client
 
@@ -81,6 +125,14 @@ cd clientsample
 cmake -G Ninja -B build -DCMAKE_BUILD_TYPE=Release
 cmake --build build --parallel
 ```
+
+On Windows, open `clientsample` in VS Code with CMake Tools or Visual Studio
+2022, select an x64 MSVC configuration, and build the sample. Run
+`shadnet-sample.exe` through the IDE, supplying the arguments shown below
+in its launch configuration. Prefer these IDE workflows for Windows tasks;
+use PowerShell only as a last resort, not as the default setup.
+The sample client's matchmaking code uses an older command map and is not
+compatible with the current server.
 
 Then register against a running server:
 
@@ -106,8 +158,8 @@ account exists and you can `login` with the same client (or from shadPS4).
 
 The fields a registration supplies:
 
-- **npid**: Your NP ID / username (validated; must be unique, case-insensitive)
-- **password**: Your passwerd
+- **npid**: Your NP ID / username, 3–16 characters; letters, digits, underscore, or hyphen. Unique ignoring case, but login requires the registered casing.
+- **password**: Your password
 - **email**: Your email (must be unique)
 - **secretKey**: only required if the server operator set one (see below)
 
@@ -118,8 +170,8 @@ Registration is governed by `shadnet.cfg`:
 | Key | Effect                                                                                                                                                |
 |-----|-------------------------------------------------------------------------------------------------------------------------------------------------------|
 | `RegistrationSecretKey` | Empty (default), then registration is **open** to anyone. Set to a value, then clients must send a matching `secret_key`, or they get `Unauthorized`. |
-| `EmailValidated` | When `true`, login requires a validated email token.                                                                                                  |
-| Banned domains | Email addresses on a banned domain are rejected (`CreationBannedEmailProvider`).                                                                      |
+| `EmailValidated` | When `true`, game login requires the stored account token. No email-token delivery flow is implemented.                                                                                                  |
+| `domains_banlist.txt` | Binary registration rejects listed email domains (`CreationBannedEmailProvider`); HTTP registration does not apply this list.                                                                      |
 
 To host a private instance, set a `RegistrationSecretKey` in `shadnet.cfg` and
 share that key only with the people you want to allow to register.
