@@ -136,27 +136,6 @@ QString serializeWorldsConfig(const WorldsConfig& config) {
     return text;
 }
 
-QString exampleWorldsConfig() {
-    return QStringLiteral("# worlds.cfg - matchmaking worlds\n"
-                          "# Example data for the interactive preview.\n"
-                          "# Regional titles in one group share a room pool.\n"
-                          "\n"
-                          "[groups]\n"
-                          "CUSA00207 = bloodborne\n"
-                          "CUSA00208 = bloodborne\n"
-                          "CUSA00299 = bloodborne\n"
-                          "CUSA00900 = bloodborne\n"
-                          "CUSA01363 = bloodborne\n"
-                          "CUSA03014 = bloodborne\n"
-                          "CUSA03023 = bloodborne\n"
-                          "CUSA03173 = bloodborne\n"
-                          "CUSA03179 = bloodborne\n"
-                          "\n"
-                          "[worlds]\n"
-                          "# GROUP | WORLD_ID | SERVER_ID | LOBBIES_NUM | MAX_LOBBY_MEMBERS\n"
-                          "bloodborne | 1 | 1 | 0 | 0\n");
-}
-
 QJsonObject worldsSnapshotJson(const WorldsSnapshot& s) {
     return {{QStringLiteral("content"), s.content},
             {QStringLiteral("revision"), s.revision},

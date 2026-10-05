@@ -1,13 +1,13 @@
 // SPDX-FileCopyrightText: Copyright 2026 shadNet Project
 // SPDX-License-Identifier: GPL-2.0-or-later
 #include <QApplication>
+#include <QCommandLineParser>
 #include <QDir>
 #include <QFileInfo>
 #include <QSettings>
-#include "member_window.h"
 #include "localworldsbackend.h"
+#include "member_window.h"
 #include "worldsdialog.h"
-#include <QCommandLineParser>
 
 int main(int argc, char* argv[]) {
     QApplication app(argc, argv);

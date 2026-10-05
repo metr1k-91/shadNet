@@ -176,35 +176,6 @@ requires one initial restart; later Worlds changes can be reloaded live.
 
 The parser, file storage and editor components live in `common/worlds`.
 
-### Worlds and Toolbox tests
-
-The service/local-socket tests are a standalone CMake project requiring Qt Core,
-Network and Test. Toolbox tests additionally use Sql and Widgets:
-
-```bash
-cmake -S tests -B out/worlds-tests -DCMAKE_PREFIX_PATH="$QTDIR"
-cmake --build out/worlds-tests --parallel
-ctest --test-dir out/worlds-tests --output-on-failure
-cmake -S membertool -B out/toolbox -DCMAKE_PREFIX_PATH="$QTDIR" -DMEMBER_TOOL_BUILD_TESTS=ON
-cmake --build out/toolbox --parallel
-ctest --test-dir out/toolbox --output-on-failure
-```
-
-On Windows, run these with the compiler and Qt runtime on `PATH`, using the
-same kit as the server build. Widget tests configure the offscreen Qt plugin.
-The Python 3 HTTP integration test accepts a built server with its runtime
-libraries deployed beside it. It starts its own loopback server with generated
-test data in a new directory under the supplied workspace and stops that process:
-
-```bash
-python tests/worlds_http_smoke.py --server /path/to/build/shadnet.exe --work-dir out/integration
-```
-
-This test covers authentication, revisions, save/reload, live TCP connection
-preservation, invalid config rejection, audit entries and admin-role revocation.
-Service tests also cover occupied-room rejection, repeated reloads, atomic-save
-failures and local offline/live editing. Test fixtures are retained for inspection.
-
 ### Using the sample client
 
 The sample client is a standalone tool (protobuf only, no Qt). Build it

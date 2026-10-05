@@ -229,16 +229,10 @@ private:
 
 } // namespace
 
-WorldsDialog::WorldsDialog(QWidget* parent) : WorldsDialog(new DemoWorldsBackend, parent) {
-    m_backend->setParent(this);
-}
-
 WorldsDialog::WorldsDialog(WorldsBackend* backend, QWidget* parent)
     : QDialog(parent), m_backend(backend) {
     setObjectName(QStringLiteral("worldsDialog"));
-    setWindowTitle(backend->kind() == WorldsBackend::Kind::Preview
-                       ? tr("Worlds configuration - interactive preview[*]")
-                       : tr("Worlds configuration[*]"));
+    setWindowTitle(tr("Worlds configuration[*]"));
     resize(860, 600);
     setMinimumSize(760, 420);
     setStyleSheet(QStringLiteral(

@@ -37,11 +37,10 @@ struct WorldsConfig {
     }
 };
 
-// A strict preview of the server's [groups] / [worlds] grammar.
+// Parse the server's [groups] / [worlds] grammar with strict validation.
 WorldsConfig parseWorldsConfig(const QString& text);
 // Emit the table data in canonical server syntax, preserving row order.
 QString serializeWorldsConfig(const WorldsConfig& config);
-QString exampleWorldsConfig();
 
 constexpr qsizetype kMaxWorldsBytes = 512 * 1024;
 struct WorldsSnapshot {

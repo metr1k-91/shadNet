@@ -12,14 +12,12 @@ class QPushButton;
 class QTableWidget;
 class QTabWidget;
 
-// Shared table editor. The backend determines whether operations are remote,
-// local-only, or an isolated interactive preview.
+// Table editor for a remote server or a local configuration file.
 class WorldsDialog : public QDialog {
     Q_OBJECT
 public:
-    explicit WorldsDialog(QWidget* parent = nullptr);
-    WorldsDialog(WorldsBackend* backend, QWidget* parent = nullptr);
-    // The eventual API payload is generated from the data shown in the tables.
+    explicit WorldsDialog(WorldsBackend* backend, QWidget* parent = nullptr);
+    // Configuration is generated from the data shown in the tables.
     QString draftText() const;
 
 public slots:

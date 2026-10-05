@@ -426,7 +426,8 @@ QJsonObject AdminApiServer::UserRowToJson(const AdminUserRow& row) const {
 // ── Routes ────────────────────────────────────────────────────────────────────
 
 void AdminApiServer::RegisterRoutes() {
-    auto worldsRequest = [this](const QHttpServerRequest& req, const QString& operation) -> QHttpServerResponse {
+    auto worldsRequest = [this](const QHttpServerRequest& req,
+                                const QString& operation) -> QHttpServerResponse {
         const auto session = Authenticate(req);
         if (!session)
             return AuthError(req);
@@ -445,30 +446,41 @@ void AdminApiServer::RegisterRoutes() {
             QString error;
             const auto parsed = ParseJsonBody(req, error);
             if (!parsed)
-                return JsonError(QHttpServerResponse::StatusCode::BadRequest, ERR_BAD_REQUEST, error);
+                return JsonError(QHttpServerResponse::StatusCode::BadRequest, ERR_BAD_REQUEST,
+                                 error);
             body = *parsed;
         }
         const auto result = m_shared->worlds->Handle(operation, body);
         if (operation != QLatin1String("read")) {
             const QString action = QStringLiteral("worlds_") + operation +
                                    (result.ok ? QString() : QStringLiteral("_failed"));
-            const QString detail = result.ok
-                ? QStringLiteral("saved=%1 active=%2").arg(result.snapshot.revision, result.snapshot.activeRevision)
-                : result.message;
-            if (!m_db->AddAuditEntry(session->userId, session->npid, action, 0, QStringLiteral("worlds.cfg"), detail))
+            const QString detail =
+                result.ok ? QStringLiteral("saved=%1 active=%2")
+                                .arg(result.snapshot.revision, result.snapshot.activeRevision)
+                          : result.message;
+            if (!m_db->AddAuditEntry(session->userId, session->npid, action, 0,
+                                     QStringLiteral("worlds.cfg"), detail))
                 qWarning() << "Could not persist worlds audit:" << m_db->lastError();
-            qInfo() << "Admin worlds" << operation << "by" << session->npid << (result.ok ? "succeeded" : "failed") << detail;
+            qInfo() << "Admin worlds" << operation << "by" << session->npid
+                    << (result.ok ? "succeeded" : "failed") << detail;
         }
         if (!result.ok)
-            return JsonError(static_cast<QHttpServerResponse::StatusCode>(result.status), result.status * 10, result.message);
+            return JsonError(static_cast<QHttpServerResponse::StatusCode>(result.status),
+                             result.status * 10, result.message);
         return JsonOk(worldsSnapshotJson(result.snapshot));
     };
     m_http->route("/admin/v1/worlds/config", QHttpServerRequest::Method::Get,
-                  [worldsRequest](const QHttpServerRequest& req) { return worldsRequest(req, QStringLiteral("read")); });
+                  [worldsRequest](const QHttpServerRequest& req) {
+                      return worldsRequest(req, QStringLiteral("read"));
+                  });
     m_http->route("/admin/v1/worlds/config", QHttpServerRequest::Method::Put,
-                  [worldsRequest](const QHttpServerRequest& req) { return worldsRequest(req, QStringLiteral("save")); });
+                  [worldsRequest](const QHttpServerRequest& req) {
+                      return worldsRequest(req, QStringLiteral("save"));
+                  });
     m_http->route("/admin/v1/worlds/reload", QHttpServerRequest::Method::Post,
-                  [worldsRequest](const QHttpServerRequest& req) { return worldsRequest(req, QStringLiteral("reload")); });
+                  [worldsRequest](const QHttpServerRequest& req) {
+                      return worldsRequest(req, QStringLiteral("reload"));
+                  });
 
     m_http->route(
         "/admin/v1/status", QHttpServerRequest::Method::Get, [this](const QHttpServerRequest&) {
