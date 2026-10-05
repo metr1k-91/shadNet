@@ -5,15 +5,38 @@
 #include <QFileInfo>
 #include <QSettings>
 #include "member_window.h"
+#include "localworldsbackend.h"
+#include "worldsdialog.h"
+#include <QCommandLineParser>
 
 int main(int argc, char* argv[]) {
     QApplication app(argc, argv);
     app.setOrganizationName("shadNet");
-    app.setApplicationName("Member Manager");
+    app.setApplicationName("shadNet Toolbox");
 
+    // Keep existing file selections when upgrading to the renamed application.
+    QSettings settings;
+    const QSettings legacySettings("shadNet", "Member Manager");
+    for (const auto* key : {"databasePath", "worldsPath"}) {
+        if (!settings.contains(key) && legacySettings.contains(key))
+            settings.setValue(key, legacySettings.value(key));
+    }
+
+    QCommandLineParser parser;
+    parser.setApplicationDescription("shadNet Toolbox: local account and Worlds tools.");
+    parser.addHelpOption();
+    parser.addOption({"worlds", "Open a local worlds.cfg directly.", "path"});
+    parser.addPositionalArgument("database", "Optional path to the local member database.");
+    parser.process(app);
+    if (parser.isSet("worlds")) {
+        LocalWorldsBackend backend(parser.value("worlds"));
+        WorldsDialog dialog(&backend);
+        dialog.exec();
+        return 0;
+    }
     QString path;
-    if (app.arguments().size() > 1) {
-        path = app.arguments().at(1);
+    if (!parser.positionalArguments().isEmpty()) {
+        path = parser.positionalArguments().first();
     } else {
         const QDir executable(app.applicationDirPath());
         const QStringList candidates = {
